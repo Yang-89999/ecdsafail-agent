@@ -6,7 +6,7 @@ adapter = "ecdsafail"
 # "codex": run solvers through `codex exec` (auth: `codex login` or OPENAI_API_KEY)
 # "openai": Responses API tool loop (auth: OPENAI_API_KEY)
 backend = "codex"
-model = ""              # empty = backend default; set a Codex model name to pin one
+model = "gpt-6-astra"   # as shown by /model inside codex; empty = Codex default
 reasoning_effort = "high"
 
 solvers = 2             # parallel solver worktrees per round

@@ -38,9 +38,9 @@ def scout(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, n: int = 15,
     commits = recent_upstream_commits(adapter, cfg, n)
     added = []
     model = None
-    if summarize and cfg.backend == "openai":
-        from ..llm import OpenAIBackend
-        model = OpenAIBackend(cfg.model, "medium")
+    if summarize and cfg.backend != "dry":
+        from ..llm import make_backend
+        model = make_backend(cfg)
     for c in commits:
         title = f"Lead from upstream {c['commit']} ({c['date']})"
         if model:

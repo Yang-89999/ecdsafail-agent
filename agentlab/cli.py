@@ -4,7 +4,9 @@
   agentlab best                       public best from the shared repo
   agentlab scout [-n 15]              merged submissions -> ideas
   agentlab ideas [add "title" "why"]  list / add ideas
-  agentlab run --rounds N --solvers K the loop
+  agentlab run --rounds N --solvers K the loop (or --days 7 / --hours 12 for a long, self-refilling run)
+  agentlab brainstorm                 new candidate ideas from the profile and past reports
+  agentlab status                     the status file a long run writes after every round
   agentlab score <worktree> [--shots] fast score of any worktree
   agentlab audit <exp>                clean-room + official benchmark for one experiment
   agentlab approve <exp> --by NAME    record a human approval
@@ -37,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("ideas"); p.add_argument("action", nargs="?", default="list"); p.add_argument("args", nargs="*")
     p = sub.add_parser("run"); p.add_argument("--rounds", type=int, default=1); p.add_argument("--solvers", type=int, default=None)
     p.add_argument("--audit-threshold", type=float, default=None, help="min fast-score relative gain to trigger an audit (default from config)")
+    p.add_argument("--hours", type=float, default=None); p.add_argument("--days", type=float, default=None)
+    sub.add_parser("brainstorm"); sub.add_parser("status")
     p = sub.add_parser("score"); p.add_argument("worktree", type=Path); p.add_argument("--shots", type=int, default=None)
     p = sub.add_parser("audit"); p.add_argument("exp", type=int)
     p = sub.add_parser("approve"); p.add_argument("exp", type=int); p.add_argument("--by", required=True); p.add_argument("--note", default="")
@@ -74,7 +78,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{i.id}] {i.status:9s} prior={i.prior:.3f} tries={i.tries} best={i.best_gain*100:+.3f}%  {i.title}{extra}")
     elif a.cmd == "run":
         from .orchestrator import run_rounds
-        run_rounds(cfg, a.rounds, a.solvers, cfg.audit_threshold if a.audit_threshold is None else a.audit_threshold)
+        hours = (a.days * 24 if a.days else None) or a.hours
+        rounds = 0 if hours and a.rounds == 1 else a.rounds   # a time limit alone means "as many rounds as fit"
+        run_rounds(cfg, rounds, a.solvers, cfg.audit_threshold if a.audit_threshold is None else a.audit_threshold, hours=hours)
     elif a.cmd == "score":
         res = adapter.fast_score(a.worktree, a.shots or cfg.fast_shots)
         print(json.dumps(res.__dict__, indent=2, default=str))
@@ -105,6 +111,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"fetched {n} new papers/posts ({len(ledger.papers())} total)")
         if not a.fetch_only:
             print(f"extracted {extract(cfg, ledger)} new candidate ideas; run `agentlab review` to score them")
+    elif a.cmd == "brainstorm":
+        from .roles.brainstorm import brainstorm
+        brainstorm(cfg, adapter, ledger)
+        print("run `agentlab review` to score the candidates")
+    elif a.cmd == "status":
+        p = Path(cfg.runs_dir).parent / "status.md"
+        print(p.read_text() if p.exists() else ledger.summary_text())
     elif a.cmd == "watch":
         from .watch import watch
         return watch(Path(cfg.runs_dir), a.exp, follow=not a.no_follow)

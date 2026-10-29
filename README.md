@@ -38,6 +38,21 @@ agentlab run --rounds 1 --solvers 1  # first solver round
 The harness checkout, ledger/worktrees and Codex login live in Docker volumes and survive restarts.
 Edits to this repo on the Mac are visible inside the container immediately.
 
+### A week unattended
+
+```bash
+docker/start.sh                 # = agentlab run --days 7 --solvers 1, detached, restarts with Docker
+docker/logs.sh                  # follow the log
+docker/shell.sh                 # shell inside: agentlab status | agentlab watch | agentlab approve <exp> --by Yang
+docker/stop.sh
+```
+
+A long run refills its own backlog (upstream scout + brainstorm when fewer than 3 ideas are open, one
+arXiv refresh per day, every candidate through the reviewer), waits with exponential backoff when the
+model backend fails fast (usage limits), survives a crashed round, and rewrites `work/status.md` after
+every round with anything waiting for approval. Keep the Mac plugged in with the lid open; `start.sh`
+runs `caffeinate` so it does not sleep.
+
 ## Setup (Linux or macOS, without Docker)
 
 macOS note: the harness's `setup.sh` sources `~/.cargo/env` and the system bash 3.2 aborts if that file is

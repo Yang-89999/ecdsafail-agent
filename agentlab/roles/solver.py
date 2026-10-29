@@ -98,6 +98,13 @@ def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id
         except json.JSONDecodeError:
             report = {"status": "unparsed"}
     (run_dir / "report.json").write_text(json.dumps(report, indent=2))
+    if run.returncode != 0 and not report and run.duration_s < 300:
+        # The model never really started (usage limit, auth, network): not the idea's fault.
+        tail = Path(run.log_path).read_text(errors="replace")[-600:] if Path(run.log_path).exists() else ""
+        ledger.finish_experiment(exp_id, "backend_failed", log_path=run.log_path,
+                                 note=f"codex exited {run.returncode} after {int(run.duration_s)} s", details={"log_tail": tail})
+        print(f"[agentlab] exp #{exp_id}: model backend failed within {int(run.duration_s)} s:\n{tail[-400:]}", flush=True)
+        return exp_id
 
     # Independent re-score of whatever the agent left in the tree.
     bad = adapter.protected_diff(wt, base)

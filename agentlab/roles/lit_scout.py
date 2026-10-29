@@ -65,9 +65,9 @@ EXTRACT_SCHEMA = {
 }
 
 
-def fetch_arxiv(query: str, max_results: int = 15, attempts: int = 3) -> list[dict]:
+def fetch_arxiv(query: str, max_results: int = 15, attempts: int = 3, sort: str = "relevance") -> list[dict]:
     q = urllib.parse.urlencode({"search_query": f"all:{query}", "start": 0, "max_results": max_results,
-                                "sortBy": "relevance"})
+                                "sortBy": sort, "sortOrder": "descending"})
     for k in range(attempts):
         try:
             with urllib.request.urlopen(ARXIV + q, timeout=60) as r:
@@ -106,11 +106,12 @@ def fetch_url(url: str) -> dict:
 
 
 def harvest(cfg: Config, ledger: Ledger, queries: list[str] | None = None, urls: list[str] | None = None,
-            per_query: int = 15) -> int:
+            per_query: int = 15, recent: bool = False) -> int:
+    """recent=True asks arXiv for the newest submissions instead of the most relevant (daily refresh)."""
     new = 0
     for q in queries or cfg.extra.get("lit_queries") or DEFAULT_QUERIES:
         try:
-            papers = fetch_arxiv(q, per_query)
+            papers = fetch_arxiv(q, per_query, sort="submittedDate" if recent else "relevance")
         except Exception as e:  # noqa: BLE001
             print(f"[lit-scout] arxiv query failed ({q!r}): {e}")
             continue

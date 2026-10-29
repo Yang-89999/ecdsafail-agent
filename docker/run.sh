@@ -11,7 +11,8 @@
 #   agentlab-codex     -> Codex login
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd -P)"
-docker build -q -t agentlab -f "$here/docker/Dockerfile" "$here" >/dev/null
+echo "== building the agentlab image (first time ~5-10 min; cached afterwards) =="
+docker build -t agentlab -f "$here/docker/Dockerfile" "$here"
 tty_flags=(-i)
 [[ -t 0 ]] && tty_flags=(-it)
 exec docker run --rm "${tty_flags[@]}" --name "agentlab-$$" \

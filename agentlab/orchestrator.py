@@ -101,6 +101,7 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
             break
         if state["deadline"] and time.time() >= state["deadline"]:
             print("time is up", flush=True)
+            _close_unit(cfg, ledger, state)
             break
         try:
             _one_round(cfg, adapter, ledger, rng, solvers, audit_threshold, base_ref, state)
@@ -118,6 +119,17 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
             time.sleep(wait)
         time.sleep(1)
     print(ledger.summary_text())
+
+
+def _close_unit(cfg: Config, ledger: Ledger, state: dict) -> None:
+    """End of a time-limited unit: keep its summary under work/units/ and print it to the log."""
+    write_status(cfg, ledger, state)
+    units = Path(cfg.runs_dir).parent / "units"
+    units.mkdir(parents=True, exist_ok=True)
+    n = len(list(units.glob("unit-*.md"))) + 1
+    text = (Path(cfg.runs_dir).parent / "status.md").read_text()
+    (units / f"unit-{n:02d}-{time.strftime('%Y%m%d-%H%M', time.gmtime())}.md").write_text(text)
+    print(f"\n===== unit {n} finished =====\n{text}", flush=True)
 
 
 def _maybe_strategize(cfg, adapter, ledger, state, force: bool = False, every: int = 6) -> None:

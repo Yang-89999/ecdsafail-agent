@@ -38,10 +38,11 @@ agentlab run --rounds 1 --solvers 1  # first solver round
 The harness checkout, ledger/worktrees and Codex login live in Docker volumes and survive restarts.
 Edits to this repo on the Mac are visible inside the container immediately.
 
-### A week unattended
+### Units of work (5 h each) or a week unattended
 
 ```bash
-docker/start.sh                 # = agentlab run --days 7 --solvers 1, detached, restarts with Docker
+docker/start.sh                 # one unit = agentlab run --hours 5 --solvers 1, detached; run again for the next unit
+docker/start.sh --days 7        # or one long run
 docker/logs.sh                  # follow the log
 docker/shell.sh                 # shell inside: agentlab status | agentlab watch | agentlab approve <exp> --by Yang
 docker/stop.sh

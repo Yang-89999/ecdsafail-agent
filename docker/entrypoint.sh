@@ -7,8 +7,11 @@ if [[ ! -d /root/ecdsafail-challenge/.git ]]; then
   git clone https://github.com/ecdsafail/ecdsafail-challenge.git /root/ecdsafail-challenge
 fi
 
-if ! python3 -c "import agentlab" 2>/dev/null; then
-  pip install -q -e /work/ecdsafail-agent
+# The container is fresh on every start (--rm), so install the CLI each time (a few seconds).
+# Do not test with `import agentlab`: the working directory is the repo, so the import succeeds
+# even when the `agentlab` command is missing.
+if ! command -v agentlab >/dev/null 2>&1; then
+  pip install -q --root-user-action=ignore -e /work/ecdsafail-agent
 fi
 
 if [[ ! -x /root/ecdsafail-challenge/target/release/eval_circuit ]]; then

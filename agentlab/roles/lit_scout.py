@@ -15,6 +15,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -64,11 +65,18 @@ EXTRACT_SCHEMA = {
 }
 
 
-def fetch_arxiv(query: str, max_results: int = 15) -> list[dict]:
+def fetch_arxiv(query: str, max_results: int = 15, attempts: int = 3) -> list[dict]:
     q = urllib.parse.urlencode({"search_query": f"all:{query}", "start": 0, "max_results": max_results,
                                 "sortBy": "relevance"})
-    with urllib.request.urlopen(ARXIV + q, timeout=60) as r:
-        root = ET.fromstring(r.read())
+    for k in range(attempts):
+        try:
+            with urllib.request.urlopen(ARXIV + q, timeout=60) as r:
+                root = ET.fromstring(r.read())
+            break
+        except Exception:  # noqa: BLE001  (arXiv often cuts responses short; it asks for ~3 s between calls)
+            if k == attempts - 1:
+                raise
+            time.sleep(3 * (k + 1))
     out = []
     for e in root.findall("a:entry", NS):
         pid = (e.findtext("a:id", "", NS) or "").rsplit("/", 1)[-1]
@@ -110,6 +118,7 @@ def harvest(cfg: Config, ledger: Ledger, queries: list[str] | None = None, urls:
             if ledger.add_paper(p["id"], p["title"], p["authors"], p["published"], p["url"], p["abstract"], q):
                 new += 1
         print(f"[lit-scout] {q!r}: {len(papers)} results, {new} new so far", flush=True)
+        time.sleep(3)
     for u in urls or []:
         try:
             p = fetch_url(u)

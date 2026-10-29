@@ -62,6 +62,10 @@ def seed_ideas(ledger: Ledger) -> int:
         before = len(ledger.ideas(None))
         ledger.add_idea(title, why, "seed", prior=prior)
         n += len(ledger.ideas(None)) - before
+        # ledgers created before a seed's prior changed keep the old value; refresh untried seeds
+        for i in ledger.ideas(None):
+            if i.title == title and i.source == "seed" and i.tries == 0 and i.prior != prior:
+                ledger.set_idea_status(i.id, i.status, prior=prior)
     return n
 
 

@@ -86,7 +86,9 @@ def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id
     (run_dir / "prompt.md").write_text(prompt)
 
     t0 = time.time()
+    print(f"[agentlab] solver exp #{exp_id} started on idea {idea_id}; follow it with: tail -f {run_dir / 'agent.log'}", flush=True)
     run = backend.run(prompt, wt, run_dir / "agent.log", extra_dirs=[Path(cfg.skills_dir).parent / "tools"])
+    print(f"[agentlab] solver exp #{exp_id} agent finished after {int(run.duration_s) // 60} min (exit {run.returncode}); re-scoring its tree", flush=True)
     report: dict = {}
     m = REPORT_RE.search(run.final_message or "")
     if m:

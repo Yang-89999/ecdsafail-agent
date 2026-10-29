@@ -71,24 +71,18 @@ class EcdsaFailAdapter(CompetitionAdapter):
         t0 = time.time()
         log = Path(worktree) / ".agentlab" / f"fast_{int(t0)}.log"
         log.parent.mkdir(exist_ok=True)
-        proc = subprocess.run(
+        rc, out = _run_logged(
             ["bash", str(SCRIPTS / "fast_score.sh"), str(worktree), str(shots), str(self.root)],
-            capture_output=True, text=True, timeout=self.cfg.solver_timeout_s,
-        )
-        log.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
-        res = self._parse(proc.stdout, proc.returncode, shots, str(log), time.time() - t0)
-        return res
+            None, log, self.cfg.solver_timeout_s, f"fast score ({shots} shots)")
+        return self._parse(out, rc, shots, str(log), time.time() - t0)
 
     def full_verify(self, worktree: Path, note: str = "") -> ScoreResult:
         t0 = time.time()
         log = Path(worktree) / ".agentlab" / f"full_{int(t0)}.log"
         log.parent.mkdir(exist_ok=True)
-        proc = subprocess.run(
-            ["bash", "benchmark.sh", "--note", note or "agentlab full verify"],
-            cwd=worktree, capture_output=True, text=True, timeout=6 * 3600,
-        )
-        log.write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
-        res = self._parse(proc.stdout, proc.returncode, 9024, str(log), time.time() - t0)
+        rc, out = _run_logged(["bash", "benchmark.sh", "--note", note or "agentlab full verify"],
+                              worktree, log, 6 * 3600, "official benchmark (9024 shots)")
+        res = self._parse(out, rc, 9024, str(log), time.time() - t0)
         sj = Path(worktree) / "score.json"
         if res.ok and sj.exists():
             data = json.loads(sj.read_text())
@@ -131,3 +125,41 @@ class EcdsaFailAdapter(CompetitionAdapter):
         if proc.returncode != 0:
             raise RuntimeError(f"ecdsafail submit failed: {proc.stderr[-2000:]}")
         return proc.stdout[-4000:]
+
+
+# Lines worth echoing to the terminal while a long scoring run is going.
+_PROGRESS = ("-- ", "===", "!!", "  avg executed Toffoli", "  qubits", "  all ", "build_circuit:", "fast_eval:",
+             "  emitted ops", "    Finished", "   Compiling quantum_ecc")
+
+
+def _run_logged(cmd: list[str], cwd, log: Path, timeout: int, label: str) -> tuple[int, str]:
+    """Run cmd, write everything to log, echo progress lines and a heartbeat every minute."""
+    import threading
+
+    print(f"[agentlab] {label}: started (full log: {log})", flush=True)
+    t0 = time.time()
+    lines: list[str] = []
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    done = threading.Event()
+
+    def heartbeat():
+        while not done.wait(60):
+            print(f"[agentlab] {label}: still running, {int(time.time() - t0) // 60} min", flush=True)
+
+    threading.Thread(target=heartbeat, daemon=True).start()
+    try:
+        with open(log, "w") as fh:
+            for line in proc.stdout:
+                fh.write(line)
+                lines.append(line)
+                if line.startswith(_PROGRESS):
+                    print(f"[agentlab]   {line.rstrip()}", flush=True)
+                if time.time() - t0 > timeout:
+                    proc.kill()
+                    lines.append("!! timed out\n")
+                    break
+        rc = proc.wait()
+    finally:
+        done.set()
+    print(f"[agentlab] {label}: finished in {int(time.time() - t0)} s (exit {rc})", flush=True)
+    return rc, "".join(lines)

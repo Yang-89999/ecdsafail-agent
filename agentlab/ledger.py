@@ -150,6 +150,8 @@ class Ledger:
 
     # ---- bests -------------------------------------------------------------
     def record_best(self, score: int, toffoli: float, qubits: int, source: str, verified: bool) -> None:
+        if self.db.execute("SELECT 1 FROM bests WHERE source=? AND score=?", (source, score)).fetchone():
+            return
         self.db.execute(
             "INSERT INTO bests(ts,score,toffoli,qubits,source,verified) VALUES(?,?,?,?,?,?)",
             (time.time(), score, toffoli, qubits, source, int(verified)),

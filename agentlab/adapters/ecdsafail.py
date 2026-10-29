@@ -105,7 +105,8 @@ class EcdsaFailAdapter(CompetitionAdapter):
             reason = (m_fail.group(0) if m_fail else f"exit {rc}")[:500]
             return ScoreResult(False, reason=reason, shots=shots, log_path=log, duration_s=dur)
         tof, q = float(m_tof.group(1)), int(m_q.group(1))
-        return ScoreResult(True, score=round(tof) * q, metrics={"toffoli": tof, "qubits": q},
+        # Rust's f64::round() rounds half away from zero; Python's round() is banker's rounding.
+        return ScoreResult(True, score=int(tof + 0.5) * q, metrics={"toffoli": tof, "qubits": q},
                            shots=shots, log_path=log, duration_s=dur)
 
     # --- rules ---------------------------------------------------------------

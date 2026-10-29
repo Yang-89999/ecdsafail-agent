@@ -9,7 +9,8 @@ model = ""              # empty = backend default; set a Codex model name to pin
 reasoning_effort = "high"
 
 solvers = 2             # parallel solver worktrees per round
-fast_shots = 64         # one simulator batch; the official run uses 9024
+fast_shots = 1024       # the official run uses 9024; 64 shots showed 0.016 % noise against it
+audit_threshold = 0.0005  # fast-score gain needed before the full official run
 solver_timeout_s = 10800
 explore_c = 0.6
 

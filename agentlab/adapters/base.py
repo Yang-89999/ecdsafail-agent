@@ -56,8 +56,12 @@ class CompetitionAdapter:
         out = self._git(worktree, "diff", "--name-only", base, "--")
         changed = [l for l in out.splitlines() if l.strip()]
         untracked = self._git(worktree, "ls-files", "--others", "--exclude-standard").splitlines()
+        # Scratch the system itself leaves in a worktree (logs, harness outputs) is not a rule violation.
+        scratch = (".agentlab/", "ops.bin", "score.json", "target/")
         bad = []
         for f in changed + [u for u in untracked if u.strip()]:
+            if f.startswith(scratch) or f in scratch:
+                continue
             if not any(f == p or f.startswith(p.rstrip("/") + "/") for p in self.editable_paths):
                 bad.append(f)
         return bad

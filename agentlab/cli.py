@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("scout"); p.add_argument("-n", type=int, default=15); p.add_argument("--no-summarize", action="store_true")
     p = sub.add_parser("ideas"); p.add_argument("action", nargs="?", default="list"); p.add_argument("args", nargs="*")
     p = sub.add_parser("run"); p.add_argument("--rounds", type=int, default=1); p.add_argument("--solvers", type=int, default=None)
-    p.add_argument("--audit-threshold", type=float, default=0.0, help="min fast-score relative gain to trigger an audit")
+    p.add_argument("--audit-threshold", type=float, default=None, help="min fast-score relative gain to trigger an audit (default from config)")
     p = sub.add_parser("score"); p.add_argument("worktree", type=Path); p.add_argument("--shots", type=int, default=None)
     p = sub.add_parser("audit"); p.add_argument("exp", type=int)
     p = sub.add_parser("approve"); p.add_argument("exp", type=int); p.add_argument("--by", required=True); p.add_argument("--note", default="")
@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{i.id}] {i.status:9s} tries={i.tries} best={i.best_gain*100:+.3f}%  {i.title}")
     elif a.cmd == "run":
         from .orchestrator import run_rounds
-        run_rounds(cfg, a.rounds, a.solvers, a.audit_threshold)
+        run_rounds(cfg, a.rounds, a.solvers, cfg.audit_threshold if a.audit_threshold is None else a.audit_threshold)
     elif a.cmd == "score":
         res = adapter.fast_score(a.worktree, a.shots or cfg.fast_shots)
         print(json.dumps(res.__dict__, indent=2, default=str))

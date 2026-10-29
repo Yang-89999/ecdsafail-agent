@@ -7,6 +7,8 @@ Full design note (with the competition analysis): the Claude Doc "Signature-comp
 | Role | Implementation | Trust |
 |---|---|---|
 | Scout | `roles/scout.py`: diffs of merged upstream submissions → ideas | leads only |
+| Literature Scout | `roles/lit_scout.py`: arXiv queries and post URLs → `papers` → model extraction → ideas with status `candidate`, source `lit:<paper>` | reads only; quotes a paper's numbers only as the paper's claim |
+| Idea Reviewer | `roles/idea_reviewer.py`: scores candidates on relevance, novelty (vs the code, the backlog, the profile), feasibility, expected gain → `open` with a prior, or `rejected` with the reason kept in `ideas.review` | runs before each round when candidates exist |
 | Planner | `roles/planner.py`: UCB bandit over `ideas`, optimistic prior for untried ideas | — |
 | Solver | `roles/solver.py`: one idea, one worktree, one `codex exec` / API run, then independent re-score | numbers discarded |
 | Fast scorer | `scripts/fast_score.sh` + `tools/fast_eval` (64 shots) | ranking only |

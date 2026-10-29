@@ -64,6 +64,27 @@ class CodexBackend:
         msg = last.read_text() if last.exists() else ""
         return AgentRun(msg, str(log_path), time.time() - t0, rc)
 
+    def complete(self, prompt: str, system: str = "", schema: dict | None = None, timeout_s: int = 900) -> str:
+        """Text-only call for the reading roles: read-only sandbox in an empty scratch dir, no tools needed."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="agentlab-") as d:
+            out = Path(d) / "answer.md"
+            cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "-C", d, "--sandbox", "read-only",
+                   "-c", f'model_reasoning_effort="{self.reasoning_effort}"', "-o", str(out)]
+            if self.model:
+                cmd += ["-m", self.model]
+            if schema:
+                sp = Path(d) / "schema.json"
+                sp.write_text(json.dumps(schema))
+                cmd += ["--output-schema", str(sp)]
+            cmd += ["-"]
+            full = (system + "\n\n" if system else "") + prompt
+            proc = subprocess.run(cmd, input=full, capture_output=True, text=True, timeout=timeout_s)
+            if out.exists():
+                return out.read_text()
+            raise RuntimeError(f"codex exec produced no answer (exit {proc.returncode}): {proc.stdout[-800:]}")
+
 
 class OpenAIBackend:
     """Minimal tool loop on the Responses API. Tools are confined to `cwd`."""
@@ -145,17 +166,23 @@ class OpenAIBackend:
                     inputs.append({"type": "function_call_output", "call_id": c.call_id, "output": out})
         return AgentRun(final, str(log_path), time.time() - t0, 0)
 
-    def complete(self, prompt: str, system: str = "") -> str:
-        """One-shot text completion for cheap roles."""
+    def complete(self, prompt: str, system: str = "", schema: dict | None = None, timeout_s: int = 900) -> str:
+        """One-shot completion for the reading roles; `schema` requests strict JSON output."""
+        kw = {}
+        if schema:
+            kw["text"] = {"format": {"type": "json_schema", "name": "answer", "schema": schema, "strict": True}}
         resp = self.client.responses.create(
             model=self.model, instructions=system or None, input=prompt,
-            reasoning={"effort": "medium"},
+            reasoning={"effort": "medium"}, timeout=timeout_s, **kw,
         )
         return resp.output_text
 
 
 class DryBackend:
     """No model: leaves the tree untouched and reports no_gain. For smoke-testing the pipeline."""
+
+    def complete(self, prompt: str, system: str = "", schema: dict | None = None, timeout_s: int = 0) -> str:
+        return "[]"
 
     def run(self, prompt: str, cwd: Path, log_path: Path, extra_dirs=None) -> AgentRun:
         log_path.parent.mkdir(parents=True, exist_ok=True)

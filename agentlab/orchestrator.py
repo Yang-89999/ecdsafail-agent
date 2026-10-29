@@ -37,6 +37,9 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
         if best:
             ledger.record_best(best["score"], best["toffoli"], best["qubits"], f"upstream:{best['commit']}", verified=True)
         print(f"\n=== round {r + 1}/{rounds}  public best {best['score'] if best else '?'} ===", flush=True)
+        if ledger.ideas("candidate"):
+            from .roles.idea_reviewer import review
+            print(f"  reviewing {len(ledger.ideas('candidate'))} candidate ideas first: {review(cfg, adapter, ledger)}", flush=True)
         picks = []
         ideas = ledger.ideas("open")
         for _ in range(solvers):

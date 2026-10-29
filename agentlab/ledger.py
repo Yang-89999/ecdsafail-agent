@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS ideas (
   title TEXT NOT NULL UNIQUE,
   rationale TEXT NOT NULL,
   source TEXT NOT NULL,          -- seed | scout:<commit> | solver:<exp id> | human
-  status TEXT NOT NULL DEFAULT 'open',  -- open | exhausted | done | rejected
+  status TEXT NOT NULL DEFAULT 'open',  -- candidate | open | exhausted | done | rejected
   prior REAL NOT NULL DEFAULT 0.02,     -- optimistic prior relative gain
   tries INTEGER NOT NULL DEFAULT 0,
   gain_sum REAL NOT NULL DEFAULT 0.0,   -- sum of relative gains observed (can be negative)
@@ -55,6 +55,17 @@ CREATE TABLE IF NOT EXISTS bests (
   source TEXT NOT NULL,          -- upstream:<commit> | local:<exp id>
   verified INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS papers (
+  id TEXT PRIMARY KEY,            -- arxiv id, DOI or URL
+  fetched REAL NOT NULL,
+  title TEXT NOT NULL,
+  authors TEXT,
+  published TEXT,
+  url TEXT,
+  abstract TEXT,
+  query TEXT,
+  extracted INTEGER NOT NULL DEFAULT 0  -- ideas extracted by the literature scout
+);
 CREATE TABLE IF NOT EXISTS approvals (
   id INTEGER PRIMARY KEY,
   ts REAL NOT NULL,
@@ -76,6 +87,7 @@ class Idea:
     tries: int
     gain_sum: float
     best_gain: float
+    review: str | None = None
 
 
 class Ledger:
@@ -85,12 +97,16 @@ class Ledger:
         self.db = sqlite3.connect(self.path, timeout=60, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(ideas)")}
+        if "review" not in cols:
+            self.db.execute("ALTER TABLE ideas ADD COLUMN review TEXT")
+            self.db.commit()
 
     # ---- ideas -------------------------------------------------------------
-    def add_idea(self, title: str, rationale: str, source: str, prior: float = 0.02) -> int:
+    def add_idea(self, title: str, rationale: str, source: str, prior: float = 0.02, status: str = "open") -> int:
         cur = self.db.execute(
-            "INSERT OR IGNORE INTO ideas(created,title,rationale,source,prior) VALUES(?,?,?,?,?)",
-            (time.time(), title.strip(), rationale.strip(), source, prior),
+            "INSERT OR IGNORE INTO ideas(created,title,rationale,source,prior,status) VALUES(?,?,?,?,?,?)",
+            (time.time(), title.strip(), rationale.strip(), source, prior, status),
         )
         self.db.commit()
         if cur.lastrowid:
@@ -113,8 +129,26 @@ class Ledger:
         )
         self.db.commit()
 
-    def set_idea_status(self, idea_id: int, status: str) -> None:
-        self.db.execute("UPDATE ideas SET status=? WHERE id=?", (status, idea_id))
+    def set_idea_status(self, idea_id: int, status: str, review: str | None = None, prior: float | None = None) -> None:
+        self.db.execute("UPDATE ideas SET status=?, review=COALESCE(?, review), prior=COALESCE(?, prior) WHERE id=?",
+                        (status, review, prior, idea_id))
+        self.db.commit()
+
+    # ---- papers ------------------------------------------------------------
+    def add_paper(self, pid: str, title: str, authors: str, published: str, url: str, abstract: str, query: str) -> bool:
+        cur = self.db.execute(
+            "INSERT OR IGNORE INTO papers(id,fetched,title,authors,published,url,abstract,query) VALUES(?,?,?,?,?,?,?,?)",
+            (pid, time.time(), title.strip(), authors, published, url, abstract.strip(), query),
+        )
+        self.db.commit()
+        return cur.rowcount == 1
+
+    def papers(self, unextracted_only: bool = False) -> list[sqlite3.Row]:
+        q = "SELECT * FROM papers" + (" WHERE extracted=0" if unextracted_only else "") + " ORDER BY published DESC"
+        return self.db.execute(q).fetchall()
+
+    def mark_extracted(self, ids: Iterable[str]) -> None:
+        self.db.executemany("UPDATE papers SET extracted=1 WHERE id=?", [(i,) for i in ids])
         self.db.commit()
 
     # ---- experiments -------------------------------------------------------
@@ -189,5 +223,9 @@ class Ledger:
         lines.append("Open ideas (tries, mean gain):")
         for i in self.ideas("open"):
             mean = i.gain_sum / i.tries if i.tries else float("nan")
-            lines.append(f"  [{i.id}] {i.title} (tries {i.tries}, mean {mean*100:.3f}%)" if i.tries else f"  [{i.id}] {i.title} (untried)")
+            lines.append(f"  [{i.id}] {i.title} (tries {i.tries}, mean {mean*100:.3f}%)" if i.tries else f"  [{i.id}] {i.title} (untried, prior {i.prior:.3f})")
+        n_cand = len(self.ideas("candidate"))
+        n_pap = self.db.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+        if n_cand or n_pap:
+            lines.append(f"Literature: {n_pap} papers fetched, {n_cand} candidate ideas awaiting review (`agentlab review`)")
         return "\n".join(lines)

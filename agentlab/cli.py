@@ -10,6 +10,8 @@
   agentlab approve <exp> --by NAME    record a human approval
   agentlab submit <exp>               official submit (requires an approval record and an audit)
   agentlab ledger                     summary
+  agentlab lit-scout [--url U ...]    fetch papers (arXiv + optional URLs), extract candidate ideas
+  agentlab review                     score candidate ideas; accept into the backlog or reject with a reason
 """
 
 from __future__ import annotations
@@ -39,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("approve"); p.add_argument("exp", type=int); p.add_argument("--by", required=True); p.add_argument("--note", default="")
     p = sub.add_parser("submit"); p.add_argument("exp", type=int); p.add_argument("--note", default="")
     sub.add_parser("ledger")
+    p = sub.add_parser("lit-scout"); p.add_argument("--url", action="append", default=[]); p.add_argument("--query", action="append", default=[])
+    p.add_argument("--per-query", type=int, default=15); p.add_argument("--fetch-only", action="store_true")
+    sub.add_parser("review")
     a = ap.parse_args(argv)
 
     cfg = Config.load(a.config)
@@ -63,7 +68,8 @@ def main(argv: list[str] | None = None) -> int:
         elif a.action == "seed":
             print("seeded", seed_ideas(ledger))
         for i in ledger.ideas(None):
-            print(f"[{i.id}] {i.status:9s} tries={i.tries} best={i.best_gain*100:+.3f}%  {i.title}")
+            extra = f"  <- {i.review[:90]}" if getattr(i, "review", None) else ""
+            print(f"[{i.id}] {i.status:9s} prior={i.prior:.3f} tries={i.tries} best={i.best_gain*100:+.3f}%  {i.title}{extra}")
     elif a.cmd == "run":
         from .orchestrator import run_rounds
         run_rounds(cfg, a.rounds, a.solvers, cfg.audit_threshold if a.audit_threshold is None else a.audit_threshold)
@@ -90,6 +96,16 @@ def main(argv: list[str] | None = None) -> int:
         ledger.finish_experiment(a.exp, "submitted", details={**details, "submit_output": out})
         print(out)
     elif a.cmd == "ledger":
+        print(ledger.summary_text())
+    elif a.cmd == "lit-scout":
+        from .roles.lit_scout import extract, harvest
+        n = harvest(cfg, ledger, a.query or None, a.url, a.per_query)
+        print(f"fetched {n} new papers/posts ({len(ledger.papers())} total)")
+        if not a.fetch_only:
+            print(f"extracted {extract(cfg, ledger)} new candidate ideas; run `agentlab review` to score them")
+    elif a.cmd == "review":
+        from .roles.idea_reviewer import review
+        print(json.dumps(review(cfg, adapter, ledger)))
         print(ledger.summary_text())
     return 0
 

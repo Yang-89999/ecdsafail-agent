@@ -7,7 +7,9 @@ Second: sig.golf, through the same core and a new adapter.
 The design is in `docs/design.md`. Short version: the official checker is the reward function,
 parallel Solver agents mutate one hypothesis each in their own git worktree, a bandit Planner
 allocates runs across the idea backlog, the Auditor re-runs everything in a clean room with the
-official checker, and nothing is submitted without a recorded human approval.
+official checker, and nothing is submitted without a recorded human approval. Two reading roles feed
+the backlog: the Literature Scout turns papers and posts into cited candidate ideas, and the Idea
+Reviewer scores each candidate before it can reach a solver.
 
 ## Layout
 
@@ -58,7 +60,10 @@ Model access, one of:
 ## Running
 
 ```bash
-agentlab run --rounds 3 --solvers 2      # each round: pick ideas, run solvers in parallel, re-score, audit winners
+agentlab lit-scout                       # arXiv queries (+ --url for posts) -> papers table -> candidate ideas with citations
+agentlab review                          # score candidates: accept into the backlog (with a prior) or reject with a reason
+agentlab ideas                           # the backlog, with status, prior and the reviewer's note
+agentlab run --rounds 3 --solvers 2      # each round: review pending candidates, pick ideas, run solvers, re-score, audit winners
 agentlab ledger                          # what happened
 agentlab audit 12                        # clean-room + official benchmark for experiment 12
 agentlab approve 12 --by Yang            # human gate
@@ -67,6 +72,11 @@ agentlab submit 12                       # refuses unless audited, approved, and
 
 Every solver run leaves `work/runs/exp<N>/{prompt.md,agent.log,report.json}` and a worktree under
 `work/worktrees/exp<N>` with its commits on branch `agentlab/exp<N>`.
+
+Literature queries are in `agentlab/roles/lit_scout.py` (`DEFAULT_QUERIES`); override them with
+`lit_queries = [...]` in `agentlab.toml` or `--query` on the command line. The model used by every
+role is `model` in `agentlab.toml` (or `AGENTLAB_MODEL`); leave it empty for the Codex default or set
+the exact name shown by `/model` inside `codex`. The ledger records the model for each run.
 
 ## Rules the system enforces
 

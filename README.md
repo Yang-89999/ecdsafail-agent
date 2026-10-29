@@ -20,7 +20,23 @@ work/                ledger.sqlite, worktrees/, runs/<exp>/ (prompt, agent log, 
 agentlab.toml        configuration
 ```
 
-## Setup (Linux or macOS)
+## Run in Docker (recommended on a Mac)
+
+The container is the sandbox for the untrusted circuit code from the shared repo and for the
+commands Codex runs, and it is Linux like the organisers' scorer.
+
+```bash
+git clone https://github.com/Yang-89999/ecdsafail-agent && cd ecdsafail-agent
+docker/run.sh                        # first start: builds the image, clones the harness, builds it (~15 min)
+codex login --device-auth            # inside the container: sign in with ChatGPT on your Mac's browser
+agentlab best                        # official score of the upstream head (~6-10 min)
+agentlab run --rounds 1 --solvers 1  # first solver round
+```
+
+The harness checkout, ledger/worktrees and Codex login live in Docker volumes and survive restarts.
+Edits to this repo on the Mac are visible inside the container immediately.
+
+## Setup (Linux or macOS, without Docker)
 
 macOS note: the harness's `setup.sh` sources `~/.cargo/env` and the system bash 3.2 aborts if that file is
 missing, so on a fresh Mac run `mkdir -p ~/.cargo && touch ~/.cargo/env` once before `agentlab setup`.

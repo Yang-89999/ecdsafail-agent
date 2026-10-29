@@ -40,7 +40,9 @@ class CodexBackend:
         last = log_path.with_suffix(".last.md")
         cmd = [
             "codex", "exec", "--json", "--skip-git-repo-check", "--ephemeral",
-            "-C", str(cwd), "--sandbox", "workspace-write",
+            # Inside a container the container is the sandbox and Codex's own (Landlock/seccomp) sandbox
+            # usually cannot start, so docker/run.sh sets AGENTLAB_CODEX_SANDBOX=danger-full-access.
+            "-C", str(cwd), "--sandbox", os.environ.get("AGENTLAB_CODEX_SANDBOX", "workspace-write"),
             "-c", f'model_reasoning_effort="{self.reasoning_effort}"',
             "-o", str(last),
         ]

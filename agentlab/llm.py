@@ -83,7 +83,8 @@ class CodexBackend:
             proc = subprocess.run(cmd, input=full, capture_output=True, text=True, timeout=timeout_s)
             if out.exists():
                 return out.read_text()
-            raise RuntimeError(f"codex exec produced no answer (exit {proc.returncode}): {proc.stdout[-800:]}")
+            raise RuntimeError(f"codex exec produced no answer (exit {proc.returncode}): "
+                               f"{(proc.stderr or '')[-600:]} {proc.stdout[-400:]}".strip())
 
 
 class OpenAIBackend:

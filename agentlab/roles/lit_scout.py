@@ -130,6 +130,8 @@ def extract(cfg: Config, ledger: Ledger, batch: int = 8, max_batches: int = 50) 
     papers = ledger.papers(unextracted_only=True)
     known = [i.title for i in ledger.ideas(None)]
     added = 0
+    failures = 0
+    print(f"[lit-scout] extracting from {len(papers)} unread papers with model {cfg.model or '(Codex default)'}", flush=True)
     for b in range(0, min(len(papers), batch * max_batches), batch):
         chunk = papers[b:b + batch]
         text = "\n\n".join(f"[{p['id']}] {p['title']} ({p['published']}) {p['url']}\n{p['abstract']}" for p in chunk)
@@ -150,7 +152,12 @@ Return JSON matching the schema."""
             raw = backend.complete(prompt, schema=EXTRACT_SCHEMA)
             data = json.loads(raw) if raw.strip().startswith("{") else {"ideas": []}
         except Exception as e:  # noqa: BLE001
-            print(f"[lit-scout] extraction failed on batch {b // batch}: {e}")
+            failures += 1
+            print(f"[lit-scout] extraction failed on batch {b // batch + 1}: {e}")
+            if failures >= 2 and added == 0:
+                print("[lit-scout] stopping: the model call keeps failing (check the model name). "
+                      "Fetched papers are kept; rerun `agentlab lit-scout` to extract them.")
+                return added
             continue
         for idea in data.get("ideas", []):
             title = idea["title"][:120]

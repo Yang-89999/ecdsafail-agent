@@ -90,7 +90,10 @@ Return JSON matching the schema."""
             raw = backend.complete(prompt, schema=REVIEW_SCHEMA)
             data = json.loads(raw) if raw.strip().startswith("{") else {"reviews": []}
         except Exception as e:  # noqa: BLE001
-            print(f"[review] batch {b // batch} failed: {e}")
+            print(f"[review] batch {b // batch + 1} failed: {e}")
+            if stats["reviewed"] == 0:
+                print("[review] stopping: the model call failed (check the model name); candidates stay pending.")
+                return stats
             continue
         by_id = {i.id: i for i in chunk}
         for r in data.get("reviews", []):

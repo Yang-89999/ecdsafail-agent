@@ -64,6 +64,7 @@ agentlab lit-scout                       # arXiv queries (+ --url for posts) -> 
 agentlab review                          # score candidates: accept into the backlog (with a prior) or reject with a reason
 agentlab ideas                           # the backlog, with status, prior and the reviewer's note
 agentlab run --rounds 3 --solvers 2      # each round: review pending candidates, pick ideas, run solvers, re-score, audit winners
+agentlab watch                           # readable live view of the latest solver run (second terminal)
 agentlab ledger                          # what happened
 agentlab audit 12                        # clean-room + official benchmark for experiment 12
 agentlab approve 12 --by Yang            # human gate

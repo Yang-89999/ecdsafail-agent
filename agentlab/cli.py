@@ -12,6 +12,7 @@
   agentlab ledger                     summary
   agentlab lit-scout [--url U ...]    fetch papers (arXiv + optional URLs), extract candidate ideas
   agentlab review                     score candidate ideas; accept into the backlog or reject with a reason
+  agentlab watch [exp]                readable live view of a solver run (default: the latest)
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("lit-scout"); p.add_argument("--url", action="append", default=[]); p.add_argument("--query", action="append", default=[])
     p.add_argument("--per-query", type=int, default=15); p.add_argument("--fetch-only", action="store_true")
     sub.add_parser("review")
+    p = sub.add_parser("watch"); p.add_argument("exp", type=int, nargs="?"); p.add_argument("--no-follow", action="store_true")
     a = ap.parse_args(argv)
 
     cfg = Config.load(a.config)
@@ -103,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"fetched {n} new papers/posts ({len(ledger.papers())} total)")
         if not a.fetch_only:
             print(f"extracted {extract(cfg, ledger)} new candidate ideas; run `agentlab review` to score them")
+    elif a.cmd == "watch":
+        from .watch import watch
+        return watch(Path(cfg.runs_dir), a.exp, follow=not a.no_follow)
     elif a.cmd == "review":
         from .roles.idea_reviewer import review
         print(json.dumps(review(cfg, adapter, ledger)))

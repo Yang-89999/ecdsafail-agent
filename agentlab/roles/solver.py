@@ -81,6 +81,26 @@ final message with exactly one fenced JSON block:
 """
 
 
+def harvest_notes(cfg: Config, wt: Path, base: str, exp_id: int, title: str) -> list[str]:
+    """Copy every note file the agent added or changed to work/notes/exp<N>/ (worktrees are per experiment,
+    so the thinking roles would otherwise never see them); a profiling run also refreshes work/profile.md."""
+    changed = subprocess.run(["git", "diff", "--name-only", f"{base}..HEAD"], cwd=wt, capture_output=True, text=True).stdout.split()
+    notes = [f for f in changed if f.endswith((".md", ".txt")) and (wt / f).exists()]
+    if not notes:
+        return []
+    nd = Path(cfg.runs_dir).parent / "notes" / f"exp{exp_id}"
+    nd.mkdir(parents=True, exist_ok=True)
+    for f in notes:
+        (nd / Path(f).name).write_text((wt / f).read_text(errors="replace"))
+    is_profile = any("profile" in f.lower() for f in notes) or "profile" in title.lower()
+    if is_profile:
+        text = "\n\n".join(f"<!-- {f} -->\n" + (wt / f).read_text(errors="replace") for f in notes)
+        (Path(cfg.runs_dir).parent / "profile.md").write_text(text[:60000])
+    print(f"[agentlab] exp #{exp_id} left notes {[Path(f).name for f in notes]} -> work/notes/exp{exp_id}/"
+          + (" and work/profile.md" if is_profile else ""), flush=True)
+    return notes
+
+
 def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id: int | None, brief: str,
                base_ref: str, best: dict | None) -> int:
     backend = make_backend(cfg)
@@ -112,11 +132,7 @@ def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id
         print(f"[agentlab] exp #{exp_id}: model backend failed within {int(run.duration_s)} s:\n{tail[-400:]}", flush=True)
         return exp_id
 
-    # Keep what the agent learned where the thinking roles can see it (worktrees are per experiment).
-    prof = wt / "src/point_add/memory/profile.md"
-    if prof.exists() and prof.stat().st_size > 200:
-        (Path(cfg.runs_dir).parent / "profile.md").write_text(prof.read_text())
-        print(f"[agentlab] exp #{exp_id} produced a circuit profile; saved to work/profile.md", flush=True)
+    harvest_notes(cfg, wt, base, exp_id, brief.splitlines()[0])
 
     # Independent re-score of whatever the agent left in the tree.
     bad = adapter.protected_diff(wt, base)

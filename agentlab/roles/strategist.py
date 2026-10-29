@@ -98,6 +98,12 @@ def _context(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger) -> str:
         d = json.loads(e["details"] or "{}").get("report") or {}
         reports.append({"exp": e["id"], "idea": e["idea_id"], "status": e["status"], "gain": e["gain"],
                         "what": (d.get("what_changed") or "")[:250], "why": (d.get("why_it_worked_or_not") or "")[:250]})
+    notes_dir = Path(cfg.runs_dir).parent / "notes"
+    notes = ""
+    if notes_dir.exists():
+        for d in sorted(notes_dir.iterdir(), key=lambda d: d.stat().st_mtime)[-4:]:
+            for f in sorted(d.glob("*")):
+                notes += f"\n--- {d.name}/{f.name} ---\n" + f.read_text(errors="replace")[:3000]
     best = ledger.best()
     prev = problem_path(cfg)
     prev_txt = prev.read_text()[:6000] if prev.exists() else "(none yet)"
@@ -111,6 +117,8 @@ FILES IN src/point_add: {files}
 BACKLOG (id, status, title, prior, tries, mean gain, sub-problem): {json.dumps(ideas)[:9000]}
 
 RECENT EXPERIMENTS: {json.dumps(reports)[:6000]}
+
+NOTES LEFT BY RECENT SOLVERS (measured, from their worktrees): {notes[:12000] or '(none)'}
 
 PREVIOUS PROBLEM STATEMENT (revise it; keep what still holds):
 {prev_txt}"""

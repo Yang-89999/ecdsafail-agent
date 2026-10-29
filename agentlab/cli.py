@@ -17,6 +17,7 @@
   agentlab lit-scout [--url U ...]    fetch papers (arXiv + optional URLs), extract candidate ideas
   agentlab review                     score candidate ideas; accept into the backlog or reject with a reason
   agentlab watch [exp]                readable live view of a solver run (default: the latest)
+  agentlab harvest <exp>              copy the notes an earlier run left in its worktree to work/notes (and profile)
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("lit-scout"); p.add_argument("--url", action="append", default=[]); p.add_argument("--query", action="append", default=[])
     p.add_argument("--per-query", type=int, default=15); p.add_argument("--fetch-only", action="store_true")
     sub.add_parser("review")
+    p = sub.add_parser("harvest"); p.add_argument("exp", type=int)
     p = sub.add_parser("watch"); p.add_argument("exp", type=int, nargs="?"); p.add_argument("--no-follow", action="store_true")
     a = ap.parse_args(argv)
 
@@ -129,6 +131,11 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "status":
         p = Path(cfg.runs_dir).parent / "status.md"
         print(p.read_text() if p.exists() else ledger.summary_text())
+    elif a.cmd == "harvest":
+        from .roles.solver import harvest_notes
+        e = ledger.experiment(a.exp)
+        idea = ledger.idea(e["idea_id"]) if e and e["idea_id"] else None
+        print(harvest_notes(cfg, Path(e["worktree"]), e["base_commit"], a.exp, idea.title if idea else "") or "no note files changed")
     elif a.cmd == "watch":
         from .watch import watch
         return watch(Path(cfg.runs_dir), a.exp, follow=not a.no_follow)

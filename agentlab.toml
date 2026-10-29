@@ -1,0 +1,17 @@
+# agentlab configuration. Paths are relative to nothing: use absolute paths.
+challenge_dir = "/home/user/work/ecdsafail-challenge"
+adapter = "ecdsafail"
+
+# "codex": run solvers through `codex exec` (auth: `codex login` or OPENAI_API_KEY)
+# "openai": Responses API tool loop (auth: OPENAI_API_KEY)
+backend = "codex"
+model = ""              # empty = backend default; set a Codex model name to pin one
+reasoning_effort = "high"
+
+solvers = 2             # parallel solver worktrees per round
+fast_shots = 64         # one simulator batch; the official run uses 9024
+solver_timeout_s = 10800
+explore_c = 0.6
+
+submit_only_if_beats_best = true
+min_relative_gain = 0.0

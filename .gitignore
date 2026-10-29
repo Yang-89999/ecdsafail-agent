@@ -1,0 +1,7 @@
+work/
+tools/fast_eval/target/
+tools/fast_eval/src/main.rs
+tools/fast_eval/Cargo.toml
+tools/fast_eval/Cargo.lock
+__pycache__/
+*.egg-info/

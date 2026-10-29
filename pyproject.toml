@@ -1,0 +1,16 @@
+[project]
+name = "agentlab"
+version = "0.1.0"
+description = "Autoresearch agent system for Yukon-style verifiable benchmarks (ECDSA.fail first, sig.golf next)"
+requires-python = ">=3.10"
+dependencies = ["openai>=1.50"]
+
+[project.scripts]
+agentlab = "agentlab.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agentlab*"]

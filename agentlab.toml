@@ -1,5 +1,6 @@
-# agentlab configuration. Paths are relative to nothing: use absolute paths.
-challenge_dir = "/home/user/work/ecdsafail-challenge"
+# agentlab configuration. Paths are relative to nothing: use absolute paths (~ is expanded).
+# Default layout: this repo and the harness checkout side by side.
+challenge_dir = "~/ecdsafail-challenge"
 adapter = "ecdsafail"
 
 # "codex": run solvers through `codex exec` (auth: `codex login` or OPENAI_API_KEY)

@@ -57,4 +57,8 @@ class Config:
                 setattr(cfg, k, Path(env) if isinstance(cur, Path) else type(cur)(env))
         for d in (cfg.worktrees_dir, cfg.runs_dir, cfg.ledger_path.parent):
             d.mkdir(parents=True, exist_ok=True)
+        # rustup installs to ~/.cargo/bin; a shell opened before setup.sh ran does not have it on PATH yet.
+        cargo_bin = str(Path.home() / ".cargo" / "bin")
+        if cargo_bin not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = cargo_bin + os.pathsep + os.environ.get("PATH", "")
         return cfg

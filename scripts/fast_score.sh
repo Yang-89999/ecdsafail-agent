@@ -9,6 +9,8 @@
 # This is an approximation for ranking candidates. The claim is always the
 # official benchmark.sh run.
 set -euo pipefail
+# shellcheck disable=SC1091
+. "$HOME/.cargo/env" 2>/dev/null || true
 wt="$(cd "${1:?worktree}" && pwd -P)"
 shots="${2:-64}"
 here="$(cd "$(dirname "$0")/.." && pwd -P)"

@@ -6,6 +6,8 @@
 #
 #   scripts/build_fast_eval.sh <challenge checkout>
 set -euo pipefail
+# shellcheck disable=SC1091
+. "$HOME/.cargo/env" 2>/dev/null || true
 challenge="$(cd "${1:?challenge dir}" && pwd -P)"
 here="$(cd "$(dirname "$0")/.." && pwd -P)"
 crate="$here/tools/fast_eval"

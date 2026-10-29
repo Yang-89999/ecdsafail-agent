@@ -64,13 +64,17 @@ class CodexBackend:
         msg = last.read_text() if last.exists() else ""
         return AgentRun(msg, str(log_path), time.time() - t0, rc)
 
-    def complete(self, prompt: str, system: str = "", schema: dict | None = None, timeout_s: int = 900) -> str:
-        """Text-only call for the reading roles: read-only sandbox in an empty scratch dir, no tools needed."""
+    def complete(self, prompt: str, system: str = "", schema: dict | None = None, timeout_s: int = 900,
+                 cwd: Path | None = None) -> str:
+        """One-shot call for the reading/thinking roles. With `cwd` the model may read that tree (a throwaway
+        worktree); without it, an empty scratch dir. Codex's own read-only sandbox cannot start inside Docker,
+        so the sandbox mode follows AGENTLAB_CODEX_SANDBOX like the solver runs do."""
         import tempfile
 
         with tempfile.TemporaryDirectory(prefix="agentlab-") as d:
             out = Path(d) / "answer.md"
-            cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "-C", d, "--sandbox", "read-only",
+            sandbox = os.environ.get("AGENTLAB_CODEX_SANDBOX", "read-only") if cwd else "read-only"
+            cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "-C", str(cwd or d), "--sandbox", sandbox,
                    "-c", f'model_reasoning_effort="{self.reasoning_effort}"', "-o", str(out)]
             if self.model:
                 cmd += ["-m", self.model]
@@ -167,8 +171,9 @@ class OpenAIBackend:
                     inputs.append({"type": "function_call_output", "call_id": c.call_id, "output": out})
         return AgentRun(final, str(log_path), time.time() - t0, 0)
 
-    def complete(self, prompt: str, system: str = "", schema: dict | None = None, timeout_s: int = 900) -> str:
-        """One-shot completion for the reading roles; `schema` requests strict JSON output."""
+    def complete(self, prompt: str, system: str = "", schema: dict | None = None, timeout_s: int = 900,
+                 cwd: Path | None = None) -> str:
+        """One-shot completion for the reading roles; `schema` requests strict JSON output (no file access)."""
         kw = {}
         if schema:
             kw["text"] = {"format": {"type": "json_schema", "name": "answer", "schema": schema, "strict": True}}
@@ -182,7 +187,8 @@ class OpenAIBackend:
 class DryBackend:
     """No model: leaves the tree untouched and reports no_gain. For smoke-testing the pipeline."""
 
-    def complete(self, prompt: str, system: str = "", schema: dict | None = None, timeout_s: int = 0) -> str:
+    def complete(self, prompt: str, system: str = "", schema: dict | None = None, timeout_s: int = 0,
+                 cwd: Path | None = None) -> str:
         return "[]"
 
     def run(self, prompt: str, cwd: Path, log_path: Path, extra_dirs=None) -> AgentRun:

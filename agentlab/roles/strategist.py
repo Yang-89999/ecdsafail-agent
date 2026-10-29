@@ -45,12 +45,13 @@ SCHEMA = {
                             "type": "object",
                             "properties": {
                                 "title": {"type": "string"},
+                                "kind": {"type": "string", "enum": ["measurement", "optimisation"]},
                                 "existing_idea_id": {"type": ["integer", "null"]},
                                 "predicted_gain": {"type": "number"},
                                 "refutation_test": {"type": "string"},
                                 "first_experiment": {"type": "string"},
                             },
-                            "required": ["title", "existing_idea_id", "predicted_gain", "refutation_test", "first_experiment"],
+                            "required": ["title", "kind", "existing_idea_id", "predicted_gain", "refutation_test", "first_experiment"],
                             "additionalProperties": False,
                         },
                     },
@@ -135,6 +136,7 @@ def render(data: dict) -> str:
         lines += ["", f"### {sp['name']}", sp["why"].strip()]
         for h in sp["hypotheses"]:
             ref = f" (idea #{h['existing_idea_id']})" if h.get("existing_idea_id") else ""
+            ref += " [measurement]" if h.get("kind") == "measurement" else ""
             lines.append(f"- **{h['title']}**{ref}: predicted {h['predicted_gain'] * 100:.2f} %. "
                          f"Refute: {h['refutation_test']} First experiment: {h['first_experiment']}")
     if data.get("pruned_ideas"):
@@ -144,17 +146,29 @@ def render(data: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _reading_worktree(cfg: Config, adapter: CompetitionAdapter) -> Path:
+    """A throwaway checkout of the upstream head the Strategist may read (and cannot harm)."""
+    wt = Path(cfg.worktrees_dir) / "strategist"
+    root = adapter.root
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=root, capture_output=True)
+    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(wt), f"{cfg.upstream_remote}/{cfg.upstream_branch}"],
+                   cwd=root, check=True)
+    return wt
+
+
 def strategize(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger) -> dict:
     backend = make_backend(cfg)
     prompt = f"""{_skill(cfg, 'strategist')}
 
 {_context(cfg, adapter, ledger)}
 
+Your working directory is a throwaway checkout of the current circuit (src/point_add); read any file you need
+(rules in README/harness docs, the profile notes, the primitives), but change nothing: your only output is the JSON.
 Produce the problem statement: formulation, decomposition into sub-problems with honest ceilings, hypotheses per
 sub-problem (reference existing backlog ideas by id where they fit; add new ones only with a predicted gain and a
 refutation test), ideas to prune with reasons, and up to 3 open questions for the literature.
 Return JSON matching the schema."""
-    raw = backend.complete(prompt, schema=SCHEMA, timeout_s=1800)
+    raw = backend.complete(prompt, schema=SCHEMA, timeout_s=1800, cwd=_reading_worktree(cfg, adapter))
     data = json.loads(raw)
     stats = {"subproblems": len(data["subproblems"]), "updated": 0, "added": 0, "pruned": 0}
     existing = {i.id: i for i in ledger.ideas(None)}
@@ -162,6 +176,8 @@ Return JSON matching the schema."""
         ceiling = max(0.0, min(1.0, float(sp["ceiling"])))
         for h in sp["hypotheses"]:
             prior = round(max(0.001, min(float(h["predicted_gain"]), ceiling, 0.2)), 4)
+            if h.get("kind") == "measurement":
+                prior = 0.05  # measurements run early and once: after one try their mean gain (~0) takes over
             iid = h.get("existing_idea_id")
             if iid in existing:
                 i = existing[iid]
@@ -193,6 +209,8 @@ Return JSON matching the schema."""
             ask(cfg, ledger, q)
         except Exception as e:  # noqa: BLE001
             print(f"[strategist] ask failed: {e}")
+    subprocess.run(["git", "worktree", "remove", "--force", str(Path(cfg.worktrees_dir) / "strategist")],
+                   cwd=adapter.root, capture_output=True)
     print(f"[strategist] {stats}; wrote {problem_path(cfg)}", flush=True)
     return stats
 

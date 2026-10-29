@@ -19,6 +19,10 @@ Split by what the product depends on. Every sub-problem gets a **ceiling**: the 
 
 Under each open sub-problem list hypotheses: reuse backlog ideas by id where they fit, add new ones only with a predicted gain, a cheap refutation test (small modulus, gate count of a primitive, a probe) and a first experiment. Predicted gains must respect the ceiling; a prediction above its ceiling is an error. Prune backlog ideas that belong to closed sub-problems or contradict a measured result, with a reason the human can read.
 
+## Measurement versus optimisation
+
+Mark each hypothesis `measurement` (it produces numbers, not a gain: executed attribution, a lifetime census, a small-modulus count) or `optimisation`. Measurements that your ceilings depend on are scheduled first and once; say in `first_experiment` exactly what file the numbers must land in (`src/point_add/memory/<name>.md`) so the next revision can use them.
+
 ## Rules
 
 - Every number you write is either measured (profile, ledger) or labelled a prediction.

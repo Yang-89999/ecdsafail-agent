@@ -49,8 +49,8 @@ REVIEW_SCHEMA = {
 
 def _context(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger) -> str:
     root = Path(adapter.root)
-    profile = root / "src/point_add/memory/profile.md"
-    prof = profile.read_text()[:6000] if profile.exists() else "(no profile yet: the profiling idea has not run)"
+    from .planner import profile_text
+    prof = profile_text(cfg, adapter)
     listing = subprocess.run(["git", "ls-files", "src/point_add"], cwd=root, capture_output=True, text=True).stdout
     files = [l for l in listing.splitlines() if l.endswith((".rs", ".md", ".txt"))]
     tried = [(i.id, i.status, i.title, round(i.best_gain * 100, 3)) for i in ledger.ideas(None) if i.status != "candidate"]

@@ -51,8 +51,8 @@ def _skill(cfg: Config, name: str) -> str:
 def brainstorm(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, want: int = 8) -> int:
     backend = make_backend(cfg)
     root = Path(adapter.root)
-    profile = root / "src/point_add/memory/profile.md"
-    prof = profile.read_text()[:6000] if profile.exists() else "(no profile yet)"
+    from .planner import profile_text
+    prof = profile_text(cfg, adapter)
     listing = subprocess.run(["git", "ls-files", "src/point_add"], cwd=root, capture_output=True, text=True).stdout
     files = " ".join(Path(f).name for f in listing.splitlines() if f.endswith(".rs"))[:3000]
     reports = []

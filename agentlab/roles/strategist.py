@@ -86,8 +86,8 @@ def _skill(cfg: Config, name: str) -> str:
 
 def _context(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger) -> str:
     root = Path(adapter.root)
-    profile = root / "src/point_add/memory/profile.md"
-    prof = profile.read_text()[:8000] if profile.exists() else "(no measured profile yet: ask for one as the first hypothesis)"
+    from .planner import profile_text
+    prof = profile_text(cfg, adapter)
     listing = subprocess.run(["git", "ls-files", "src/point_add"], cwd=root, capture_output=True, text=True).stdout
     files = " ".join(Path(f).name for f in listing.splitlines() if f.endswith(".rs"))[:3000]
     ideas = [{"id": i.id, "status": i.status, "title": i.title, "prior": i.prior, "tries": i.tries,

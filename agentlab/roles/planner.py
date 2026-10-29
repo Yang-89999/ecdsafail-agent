@@ -9,6 +9,7 @@ the backlog is explored before the Planner settles on what works.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import random
 
 from ..ledger import Idea, Ledger
@@ -52,6 +53,15 @@ SEED_IDEAS = [
      "Evaluate alternative affine addition schedules (compute lambda, then x3, then y3) that "
      "allow earlier uncomputation of intermediates, lowering peak width."),
 ]
+
+
+def profile_text(cfg, adapter, limit: int = 8000) -> str:
+    """The measured profile. Solvers write it inside their worktree; run_solver copies it to work/profile.md
+    (merged upstream submissions may also carry one in the main checkout)."""
+    for p in (Path(cfg.runs_dir).parent / "profile.md", Path(adapter.root) / "src/point_add/memory/profile.md"):
+        if p.exists():
+            return p.read_text()[:limit]
+    return "(no measured profile yet: the profiling idea has not produced src/point_add/memory/profile.md)"
 
 
 def seed_ideas(ledger: Ledger) -> int:

@@ -112,6 +112,12 @@ def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id
         print(f"[agentlab] exp #{exp_id}: model backend failed within {int(run.duration_s)} s:\n{tail[-400:]}", flush=True)
         return exp_id
 
+    # Keep what the agent learned where the thinking roles can see it (worktrees are per experiment).
+    prof = wt / "src/point_add/memory/profile.md"
+    if prof.exists() and prof.stat().st_size > 200:
+        (Path(cfg.runs_dir).parent / "profile.md").write_text(prof.read_text())
+        print(f"[agentlab] exp #{exp_id} produced a circuit profile; saved to work/profile.md", flush=True)
+
     # Independent re-score of whatever the agent left in the tree.
     bad = adapter.protected_diff(wt, base)
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=wt, capture_output=True, text=True).stdout.strip()

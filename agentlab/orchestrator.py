@@ -91,6 +91,7 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
     base_ref = f"{cfg.upstream_remote}/{cfg.upstream_branch}"
     state = {"t0": time.time(), "deadline": time.time() + hours * 3600 if hours else None,
              "rounds": 0, "fails": 0, "last_lit": time.time()}
+    _maybe_strategize(cfg, adapter, ledger, state, force=True)
     if hours:
         print(f"running for {_fmt(hours * 3600)} (until {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(state['deadline']))}); "
               f"status in {Path(cfg.runs_dir).parent / 'status.md'}", flush=True)
@@ -119,6 +120,23 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
     print(ledger.summary_text())
 
 
+def _maybe_strategize(cfg, adapter, ledger, state, force: bool = False, every: int = 6) -> None:
+    """Formulate/decompose/allocate before the loop, then after every `every` finished experiments."""
+    from .roles.strategist import problem_path, strategize
+    if cfg.backend == "dry":
+        return
+    n_exp = len(ledger.experiments(10000))
+    due = force and not problem_path(cfg).exists() or n_exp - state.get("last_strat_exp", 0) >= every
+    if not due:
+        return
+    try:
+        print(f"  [strategist] revising the problem statement ({n_exp} experiments so far)", flush=True)
+        strategize(cfg, adapter, ledger)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [strategist] failed: {e}")
+    state["last_strat_exp"] = n_exp
+
+
 def _one_round(cfg, adapter, ledger, rng, solvers, audit_threshold, base_ref, state) -> None:
     subprocess.run(["git", "fetch", "-q", cfg.upstream_remote, cfg.upstream_branch], cwd=adapter.root, check=False)
     best = adapter.current_best()
@@ -127,10 +145,14 @@ def _one_round(cfg, adapter, ledger, rng, solvers, audit_threshold, base_ref, st
     hdr = f"=== round {state['rounds'] + 1}" + (f"  elapsed {_fmt(time.time() - state['t0'])}" if state.get("deadline") else "")
     print(f"\n{hdr}  public best {best['score'] if best else '?'} ===", flush=True)
     replenish(cfg, adapter, ledger, state)
+    _maybe_strategize(cfg, adapter, ledger, state)
     picks = []
     ideas = ledger.ideas("open")
     for _ in range(solvers):
-        idea = planner.ucb_pick([i for i in ideas if i.id not in {p.id for p in picks}], cfg.explore_c, rng)
+        taken_ids = {p.id for p in picks}
+        taken_sub = {getattr(p, "subproblem", None) for p in picks} - {None}
+        pool = [i for i in ideas if i.id not in taken_ids and getattr(i, "subproblem", None) not in taken_sub]
+        idea = planner.ucb_pick(pool or [i for i in ideas if i.id not in taken_ids], cfg.explore_c, rng)
         if idea:
             picks.append(idea)
     if not picks:

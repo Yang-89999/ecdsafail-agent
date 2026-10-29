@@ -95,6 +95,14 @@ def planner_brief(ledger: Ledger, idea: Idea, best: dict | None) -> str:
         "SELECT id, status, score, gain, note FROM experiments WHERE idea_id=? ORDER BY id DESC LIMIT 5", (idea.id,)
     ).fetchall()
     lines = [f"IDEA #{idea.id}: {idea.title}", idea.rationale, ""]
+    try:
+        from .strategist import formulation_excerpt
+        from ..config import Config as _C
+        exc = formulation_excerpt(_C.load(), getattr(idea, "subproblem", None))
+        if exc:
+            lines += [exc, ""]
+    except Exception:  # noqa: BLE001
+        pass
     if best:
         lines.append(f"Public best to beat: score {best['score']:,} = toffoli {best['toffoli']:.0f} x qubits {best['qubits']}.")
     if hist:

@@ -88,6 +88,7 @@ class Idea:
     gain_sum: float
     best_gain: float
     review: str | None = None
+    subproblem: str | None = None
 
 
 class Ledger:
@@ -100,6 +101,8 @@ class Ledger:
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(ideas)")}
         if "review" not in cols:
             self.db.execute("ALTER TABLE ideas ADD COLUMN review TEXT")
+        if "subproblem" not in cols:
+            self.db.execute("ALTER TABLE ideas ADD COLUMN subproblem TEXT")
             self.db.commit()
 
     # ---- ideas -------------------------------------------------------------
@@ -127,6 +130,10 @@ class Ledger:
             "UPDATE ideas SET tries=tries+1, gain_sum=gain_sum+?, best_gain=MAX(best_gain,?) WHERE id=?",
             (gain, gain, idea_id),
         )
+        self.db.commit()
+
+    def set_idea_subproblem(self, idea_id: int, name: str) -> None:
+        self.db.execute("UPDATE ideas SET subproblem=? WHERE id=?", (name, idea_id))
         self.db.commit()
 
     def set_idea_status(self, idea_id: int, status: str, review: str | None = None, prior: float | None = None) -> None:

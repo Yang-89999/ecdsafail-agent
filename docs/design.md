@@ -8,6 +8,7 @@ Full design note (with the competition analysis): the Claude Doc "Signature-comp
 |---|---|---|
 | Scout | `roles/scout.py`: diffs of merged upstream submissions → ideas | leads only |
 | Literature Scout | `roles/lit_scout.py`: arXiv queries and post URLs → `papers` → model extraction → ideas with status `candidate`, source `lit:<paper>` | reads only; quotes a paper's numbers only as the paper's claim |
+| Strategist | `roles/strategist.py`: profile + backlog + reports → `work/problem.md`: formulation (min T×W, T by stage, W one peak), sub-problems with ceilings and closed/open status, hypotheses with predicted gain + refutation test; sets priors = min(prediction, ceiling), prunes, tags ideas by sub-problem; runs first and every 6 experiments | the "thinking" planner; the bandit only schedules |
 | Brainstorm | `roles/brainstorm.py`: profile + recent reports + backlog → candidates, plus up to 2 open questions sent to `ask` | runs when the backlog is low |
 | Ask (on-demand literature) | `lit_scout.ask`: one specific question → arXiv search → cited answer memo (cached) + candidate ideas; exposed to solvers as `scripts/ask_lit.sh` | question-driven, not bulk |
 | Idea Reviewer | `roles/idea_reviewer.py`: scores candidates on relevance, novelty (vs the code, the backlog, the profile), feasibility, expected gain → `open` with a prior, or `rejected` with the reason kept in `ideas.review` | runs before each round when candidates exist |

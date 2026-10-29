@@ -47,7 +47,9 @@ docker/shell.sh                 # shell inside: agentlab status | agentlab watch
 docker/stop.sh
 ```
 
-A long run refills its own backlog (upstream scout + brainstorm when fewer than 3 ideas are open, one
+A long run starts with the Strategist (formulation, decomposition into sub-problems with measured ceilings,
+priors from predicted gains) and revises it after every six experiments; solvers get the formulation and
+their sub-problem in the brief, and parallel solvers are spread over different sub-problems. It also refills its own backlog (upstream scout + brainstorm when fewer than 3 ideas are open, one
 arXiv refresh per day, every candidate through the reviewer), waits with exponential backoff when the
 model backend fails fast (usage limits), survives a crashed round, and rewrites `work/status.md` after
 every round with anything waiting for approval. Keep the Mac plugged in with the lid open; `start.sh`
@@ -75,6 +77,7 @@ Model access, one of:
 ## Running
 
 ```bash
+agentlab strategy                        # Strategist: formulate the problem, decompose with ceilings, allocate -> work/problem.md
 agentlab lit-scout                       # arXiv queries (+ --url for posts) -> papers table -> candidate ideas with citations
 agentlab review                          # score candidates: accept into the backlog (with a prior) or reject with a reason
 agentlab ideas                           # the backlog, with status, prior and the reviewer's note

@@ -181,3 +181,61 @@ Return JSON matching the schema."""
         ledger.mark_extracted([p["id"] for p in chunk])
         print(f"[lit-scout] batch {b // batch + 1}: {len(data.get('ideas', []))} ideas proposed, {added} new candidates total", flush=True)
     return added
+
+
+ASK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "ideas": EXTRACT_SCHEMA["properties"]["ideas"],
+    },
+    "required": ["answer", "ideas"],
+    "additionalProperties": False,
+}
+
+
+def ask(cfg: Config, ledger: Ledger, question: str, max_papers: int = 10) -> str:
+    """On-demand literature question from a designer agent: search, read, answer with citations.
+
+    Returns a short memo (markdown). Ideas found on the way enter the ledger as candidates with
+    source `ask:<question>` so the reviewer can route them to other solvers too.
+    """
+    import hashlib
+
+    memo_dir = Path(cfg.runs_dir).parent / "lit"
+    memo_dir.mkdir(parents=True, exist_ok=True)
+    memo = memo_dir / (hashlib.sha1(question.strip().lower().encode()).hexdigest()[:12] + ".md")
+    if memo.exists():
+        return memo.read_text()
+    try:
+        papers = fetch_arxiv(question, max_papers)
+    except Exception as e:  # noqa: BLE001
+        return f"(literature search failed: {e})"
+    for p in papers:
+        ledger.add_paper(p["id"], p["title"], p["authors"], p["published"], p["url"], p["abstract"], f"ask:{question[:80]}")
+    text = "\n\n".join(f"[{p['id']}] {p['title']} ({p['published']}) {p['url']}\n{p['abstract']}" for p in papers)
+    prompt = f"""{_skill(cfg, 'lit-scout')}
+
+A circuit designer working on a reversible secp256k1 point-addition circuit (score = Toffoli count x peak qubits;
+gate set X, CX, CZ, Swap, CCX/CCZ, reset, X-basis measurement, classical control) asks:
+
+QUESTION: {question}
+
+PAPERS FOUND FOR IT:
+{text}
+
+Answer the question in at most 200 words, citing paper ids in brackets; say plainly when the papers do not answer it.
+Then list the transferable ideas (same fields as usual). Return JSON matching the schema."""
+    try:
+        raw = make_backend(cfg).complete(prompt, schema=ASK_SCHEMA)
+        data = json.loads(raw) if raw.strip().startswith("{") else {"answer": raw, "ideas": []}
+    except Exception as e:  # noqa: BLE001
+        return f"(literature answer failed: {e})"
+    for idea in data.get("ideas", []):
+        why = (f"Paper {idea['paper_id']}: {idea['claim']}\nTransfer: {idea['transfer']}\n"
+               f"First experiment: {idea['first_experiment']}\nAsked: {question}")
+        ledger.add_idea(idea["title"][:120], why, f"ask:{idea['paper_id']}", prior=0.01, status="candidate")
+    refs = "\n".join(f"- [{p['id']}] {p['title']} — {p['url']}" for p in papers)
+    out = f"# {question}\n\n{data.get('answer', '').strip()}\n\n## Papers read\n{refs}\n"
+    memo.write_text(out)
+    return out

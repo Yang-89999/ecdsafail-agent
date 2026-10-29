@@ -17,12 +17,21 @@ You have one worktree, one idea, and a scorer. Your output is a tree that scores
 6. **Commit what you keep** with a message that says what and why. Never commit a tree that fails the scorer.
 7. **Budget.** Each score run takes minutes. Plan for roughly 8 to 15 score runs. Stop when the idea is exhausted or you have a verified gain.
 
+## Think like a research agent, not a code monkey
+
+- **State the claim before the edit.** Write one line: "If I change X, Toffoli drops by about N because Y (stage Z holds M Toffolis)." A claim without a predicted size is not testable; a prediction the profile cannot support is a sign to re-read the profile.
+- **Refute cheaply first.** Before a full score run, test the claim at small size: a reduced modulus or width, a unit probe, a count of gates emitted by the primitive. The repo has probes from earlier runs (`*_probe.py`, `memory/`); add your own under `src/point_add/memory/` when a claim needs one. One minute of refutation saves a ten-minute score run.
+- **Generate several, test the best.** For a non-trivial change, sketch 2-3 variants with their predicted effect, pick the one with the best prediction-to-effort ratio, and test it. Keep the others in `next_ideas` with their predictions.
+- **Keep a lemma scratchpad.** Record each verified fact (measured numbers, invariants, "this primitive is already optimal because...") in `src/point_add/memory/<idea>.md` as you go. The next solver inherits it; the ledger inherits your report.
+- **Ask the literature a question, not a topic.** When stuck on one primitive, use the ask tool with a precise question; read the answer as a hypothesis to test, not an authority.
+- **Critique before commit.** Before committing a gain: does `ok: true` hold at the default shots; is the gain larger than the measurement noise (about 0.02 %); did peak width move the other way; is the change inside the editable folder only.
+
 ## Hard rules
 
 - Edit only the editable paths. Never touch harness, lockfiles, toolchain pins, or result logs.
 - Never claim a number you did not see printed by the scorer in this run.
 - Never tune to the test set. Inputs are derived from a hash of your own circuit; a change aimed at the inputs changes the inputs.
-- No network, no new dependencies, no background processes left running.
+- No network except the literature ask tool, no new dependencies, no background processes left running.
 - If a scorer bug looks exploitable, report it in your final message; do not use it.
 
 ## Final report

@@ -89,7 +89,10 @@ agentlab submit 12                       # refuses unless audited, approved, and
 Every solver run leaves `work/runs/exp<N>/{prompt.md,agent.log,report.json}` and a worktree under
 `work/worktrees/exp<N>` with its commits on branch `agentlab/exp<N>`.
 
-Literature queries are in `agentlab/roles/lit_scout.py` (`DEFAULT_QUERIES`); override them with
+Designers can also ask the literature a question mid-run (`bash scripts/ask_lit.sh "..."` inside a solver,
+`agentlab ask "..."` by hand): it searches arXiv for that question, answers with citations, caches the memo
+under `work/lit/`, and files any transferable ideas as candidates. The brainstorm role asks up to two open
+questions per call. Literature queries are in `agentlab/roles/lit_scout.py` (`DEFAULT_QUERIES`); override them with
 `lit_queries = [...]` in `agentlab.toml` or `--query` on the command line. The model used by every
 role is `model` in `agentlab.toml` (or `AGENTLAB_MODEL`); leave it empty for the Codex default or set
 the exact name shown by `/model` inside `codex`. The ledger records the model for each run.

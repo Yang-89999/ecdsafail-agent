@@ -42,7 +42,8 @@ def make_worktree(cfg: Config, adapter: CompetitionAdapter, exp_id: int, base_re
 def solver_prompt(cfg: Config, adapter: CompetitionAdapter, brief: str, wt: Path, fast_shots: int) -> str:
     scripts = Path(cfg.skills_dir).parent / "scripts"
     skill_core = load_skill(cfg, "solver-core")
-    skill_domain = load_skill(cfg, "reversible-arith") + "\n\n" + load_skill(cfg, "rust-circuit-dev")
+    skill_domain = (load_skill(cfg, "reversible-arith") + "\n\n" + load_skill(cfg, "rust-circuit-dev")
+                    + "\n\n" + load_skill(cfg, "design-passes"))
     return f"""You are a Solver in an autoresearch system working on the ECDSA.fail benchmark.
 Your working directory is a git worktree of the challenge repository: {wt}
 
@@ -53,6 +54,11 @@ HOW TO SCORE (cheap, {fast_shots} shots; takes several minutes because the circu
     bash {scripts}/fast_score.sh {wt} {fast_shots} {adapter.root}
 The last line of its output is JSON: {{"ok": true, "score": ..., "metrics": {{"toffoli": ..., "qubits": ...}}}}.
 Only a run that prints ok=true counts. Never edit results.tsv or score.json by hand.
+
+ASKING THE LITERATURE (allowed network use; 1-3 min; answers are cached and cited):
+    bash {scripts}/ask_lit.sh "<one specific technical question>"
+Use it when you hit a sub-problem you cannot settle from the code and notes (e.g. the cheapest known way to do
+one primitive in this gate set). Ask at most 3 questions per run; read the answer, then test, never just cite.
 
 YOUR TASK
 {brief}

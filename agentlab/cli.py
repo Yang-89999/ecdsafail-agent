@@ -6,6 +6,7 @@
   agentlab ideas [add "title" "why"]  list / add ideas
   agentlab run --rounds N --solvers K the loop (or --days 7 / --hours 12 for a long, self-refilling run)
   agentlab brainstorm                 new candidate ideas from the profile and past reports
+  agentlab ask "question"             on-demand literature answer for a designer (cited, cached)
   agentlab status                     the status file a long run writes after every round
   agentlab score <worktree> [--shots] fast score of any worktree
   agentlab audit <exp>                clean-room + official benchmark for one experiment
@@ -41,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--audit-threshold", type=float, default=None, help="min fast-score relative gain to trigger an audit (default from config)")
     p.add_argument("--hours", type=float, default=None); p.add_argument("--days", type=float, default=None)
     sub.add_parser("brainstorm"); sub.add_parser("status")
+    p = sub.add_parser("ask"); p.add_argument("question", nargs="+")
     p = sub.add_parser("score"); p.add_argument("worktree", type=Path); p.add_argument("--shots", type=int, default=None)
     p = sub.add_parser("audit"); p.add_argument("exp", type=int)
     p = sub.add_parser("approve"); p.add_argument("exp", type=int); p.add_argument("--by", required=True); p.add_argument("--note", default="")
@@ -111,6 +113,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"fetched {n} new papers/posts ({len(ledger.papers())} total)")
         if not a.fetch_only:
             print(f"extracted {extract(cfg, ledger)} new candidate ideas; run `agentlab review` to score them")
+    elif a.cmd == "ask":
+        from .roles.lit_scout import ask
+        print(ask(cfg, ledger, " ".join(a.question)))
     elif a.cmd == "brainstorm":
         from .roles.brainstorm import brainstorm
         brainstorm(cfg, adapter, ledger)

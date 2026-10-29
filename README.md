@@ -20,7 +20,11 @@ work/                ledger.sqlite, worktrees/, runs/<exp>/ (prompt, agent log, 
 agentlab.toml        configuration
 ```
 
-## Setup (Linux)
+## Setup (Linux or macOS)
+
+macOS note: the harness's `setup.sh` sources `~/.cargo/env` and the system bash 3.2 aborts if that file is
+missing, so on a fresh Mac run `mkdir -p ~/.cargo && touch ~/.cargo/env` once before `agentlab setup`.
+Homebrew, Node (`npm i -g @openai/codex`) and Python 3 are needed first.
 
 ```bash
 git clone https://github.com/ecdsafail/ecdsafail-challenge.git ../ecdsafail-challenge

@@ -18,8 +18,9 @@ SEED_IDEAS = [
     # Each is a lead to test, not a claim; the ledger records what they return.
     ("Profile the current circuit by phase",
      "Instrument build() to attribute Toffoli count and peak qubits to each stage (inversion, "
-     "multiplications, squarings, additions, uncomputation). Pick the stage with the largest "
-     "Toffoli x live-qubit share as the next target. Pure measurement, no gate changes."),
+     "multiplications, squarings, additions, uncomputation). Write the table to "
+     "src/point_add/memory/profile.md and propose the three largest targets as next_ideas. "
+     "Pure measurement, no gate changes. Runs first: every later idea should cite this table.", 0.08),
     ("Trim peak qubit width at the widest moment",
      "Find the single moment of peak width; move or reorder ancilla allocation so that moment "
      "is narrower, even at a small Toffoli cost. Score is a product, so width cuts pay as much as gate cuts."),
@@ -55,9 +56,11 @@ SEED_IDEAS = [
 
 def seed_ideas(ledger: Ledger) -> int:
     n = 0
-    for title, why in SEED_IDEAS:
+    for item in SEED_IDEAS:
+        title, why = item[0], item[1]
+        prior = item[2] if len(item) > 2 else 0.02
         before = len(ledger.ideas(None))
-        ledger.add_idea(title, why, "seed")
+        ledger.add_idea(title, why, "seed", prior=prior)
         n += len(ledger.ideas(None)) - before
     return n
 

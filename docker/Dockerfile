@@ -20,7 +20,8 @@ RUN npm install -g @openai/codex
 
 WORKDIR /work/ecdsafail-agent
 ENV AGENTLAB_CODEX_SANDBOX=danger-full-access \
-    PIP_BREAK_SYSTEM_PACKAGES=1
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    GIT_PAGER=cat PAGER=cat
 COPY docker/entrypoint.sh /usr/local/bin/agentlab-entry
 RUN chmod +x /usr/local/bin/agentlab-entry
 ENTRYPOINT ["agentlab-entry"]

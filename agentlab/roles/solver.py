@@ -65,6 +65,7 @@ WHEN DONE, commit your changes inside the worktree (git add src/point_add && git
 final message with exactly one fenced JSON block:
 ```json
 {{"status": "improved" | "no_gain" | "failed",
+  "idea_status": "promising" | "already_implemented" | "dead_end" | "needs_more_time",
   "score": <int from your last ok fast_score run or null>,
   "toffoli": <number or null>, "qubits": <int or null>,
   "what_changed": "<two sentences>",
@@ -120,6 +121,8 @@ def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id
     )
     if idea_id:
         ledger.record_idea_outcome(idea_id, gain if gain is not None else -1.0)
+        if report.get("idea_status") in ("already_implemented", "dead_end"):
+            ledger.set_idea_status(idea_id, "exhausted")
     for follow in report.get("next_ideas") or []:
         if isinstance(follow, str) and 10 < len(follow) < 400:
             ledger.add_idea(follow[:120], follow, f"solver:{exp_id}", prior=0.01)

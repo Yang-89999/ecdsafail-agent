@@ -104,12 +104,26 @@ def fetch_arxiv(query: str, max_results: int = 15, attempts: int = 3, sort: str 
 
 
 EPRINT = "https://eprint.iacr.org"
+# ePrint search matches every word, so long arXiv-style queries return nothing; it gets its own short ones.
+EPRINT_QUERIES = [
+    "quantum elliptic curve", "quantum point addition", "Shor elliptic curve", "quantum modular inversion",
+    "reversible circuit", "Toffoli", "quantum arithmetic", "modular inversion", "safegcd",
+    "constant-time inversion", "multiplicative complexity", "XOR-AND graph", "Montgomery multiplication",
+    "lazy reduction", "secp256k1", "elliptic curve hardware", "binary GCD", "Karatsuba",
+]
 
 
-def _http(url: str, timeout: int = 60) -> str:
+def _http(url: str, timeout: int = 60, attempts: int = 3) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "agentlab-lit-scout/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", errors="replace")
+    for k in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001  (IncompleteRead and resets happen; retry with a pause)
+            if k == attempts - 1:
+                raise
+            time.sleep(3 * (k + 1))
+    return ""
 
 
 def fetch_eprint(query: str, max_results: int = 10) -> list[dict]:
@@ -161,25 +175,23 @@ def harvest(cfg: Config, ledger: Ledger, queries: list[str] | None = None, urls:
     """recent=True asks arXiv for the newest submissions instead of the most relevant (daily refresh)."""
     new = 0
     sources = cfg.extra.get("lit_sources") or ["arxiv", "eprint"]
-    for q in queries or cfg.extra.get("lit_queries") or DEFAULT_QUERIES:
-        for src in sources:
-            try:
-                if src == "arxiv":
-                    papers = fetch_arxiv(q, per_query, sort="submittedDate" if recent else "relevance")
-                elif src == "eprint":
-                    if recent:
-                        continue  # ePrint search has no date ordering; the daily refresh is arXiv only
-                    papers = fetch_eprint(q, max(3, per_query // 2))
-                else:
-                    continue
-            except Exception as e:  # noqa: BLE001
-                print(f"[lit-scout] {src} query failed ({q!r}): {e}")
-                continue
-            for p in papers:
-                if ledger.add_paper(p["id"], p["title"], p["authors"], p["published"], p["url"], p["abstract"], q):
-                    new += 1
-            print(f"[lit-scout] {src} {q!r}: {len(papers)} results, {new} new so far", flush=True)
-            time.sleep(3)
+    plan = [("arxiv", q) for q in queries or cfg.extra.get("lit_queries") or DEFAULT_QUERIES] if "arxiv" in sources else []
+    if "eprint" in sources and not recent:  # ePrint search has no date ordering; the daily refresh is arXiv only
+        plan += [("eprint", q) for q in queries or cfg.extra.get("eprint_queries") or EPRINT_QUERIES]
+    for src, q in plan:
+        try:
+            if src == "arxiv":
+                papers = fetch_arxiv(q, per_query, sort="submittedDate" if recent else "relevance")
+            else:
+                papers = fetch_eprint(q, per_query)
+        except Exception as e:  # noqa: BLE001
+            print(f"[lit-scout] {src} query failed ({q!r}): {e}")
+            continue
+        for p in papers:
+            if ledger.add_paper(p["id"], p["title"], p["authors"], p["published"], p["url"], p["abstract"], q):
+                new += 1
+        print(f"[lit-scout] {src} {q!r}: {len(papers)} results, {new} new so far", flush=True)
+        time.sleep(3)
     for u in urls or []:
         try:
             p = fetch_url(u)
@@ -272,7 +284,8 @@ def ask(cfg: Config, ledger: Ledger, question: str, max_papers: int = 10) -> str
     except Exception as e:  # noqa: BLE001
         return f"(literature search failed: {e})"
     try:
-        papers += fetch_eprint(question, max(3, max_papers // 3))
+        words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9-]+", question) if len(w) > 4][:3]
+        papers += fetch_eprint(" ".join(words), max(3, max_papers // 3)) if words else []
     except Exception as e:  # noqa: BLE001
         print(f"[ask] ePrint search failed ({e}); answering from arXiv only", flush=True)
     for p in papers:

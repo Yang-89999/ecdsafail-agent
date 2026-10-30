@@ -85,6 +85,13 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
     adapter = load_adapter(cfg)
     adapter.ensure_ready()
     ledger = Ledger(cfg.ledger_path)
+    # A run killed mid-experiment (closed terminal, stopped container) leaves rows marked "running";
+    # the thinking roles would treat those as in progress and avoid their ideas forever.
+    stale = ledger.db.execute("UPDATE experiments SET status='abandoned', note=COALESCE(note,'') || ' (run interrupted)' "
+                              "WHERE status='running'").rowcount
+    ledger.db.commit()
+    if stale:
+        print(f"marked {stale} interrupted experiment(s) as abandoned", flush=True)
     planner.seed_ideas(ledger)
     rng = random.Random()
     solvers = solvers or cfg.solvers

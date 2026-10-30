@@ -223,7 +223,7 @@ def _decide_and_launch(cfg, adapter, ledger, rng, pool, running, finished_since,
         running[fut] = {"exp_id": exp_id, "idea_id": idea_id, "mode": l["mode"], "parents": l["parent_exps"], "t0": time.time(),
                         "log": str(run_dir / "agent.log")}
         state["launched"] += 1
-        what = {"new": f"idea #{idea_id}", "continue": f"continue #{l['parent_exps'][0]}", "combine": f"combine {l['parent_exps']}"}[l["mode"]]
+        what = f"idea #{idea_id}" if l["mode"] == "new" else f"{l['mode']} {l['parent_exps']}"
         print(f"  launched exp #{exp_id}: {what}", flush=True)
 
 

@@ -297,8 +297,8 @@ def _append_log(cfg, ledger, data: dict, running, finished, free_slots) -> None:
     if data.get("decision"):
         lines += [f"**Decision.** {data['decision'].strip()}", ""]
     for l in data.get("launches") or []:
-        what = {"new": f"new run on idea #{l.get('idea_id')}", "continue": f"continue exp #{(l.get('parent_exps') or [None])[0]}",
-                "combine": f"combine exps {l.get('parent_exps')}"}[l["mode"]]
+        what = (f"new run on idea #{l.get('idea_id')}" if l["mode"] == "new"
+                else f"{l['mode']} exps {l.get('parent_exps')}")
         if l["mode"] == "new" and l.get("idea_id"):
             what += f" ({ledger.idea(l['idea_id']).title[:70]})"
         lines.append(f"- launch: {what}. {l.get('why', '')} Instruction: {l.get('instruction', '')[:300]}")

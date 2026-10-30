@@ -103,6 +103,46 @@ def fetch_arxiv(query: str, max_results: int = 15, attempts: int = 3, sort: str 
     return out
 
 
+EPRINT = "https://eprint.iacr.org"
+
+
+def _http(url: str, timeout: int = 60) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "agentlab-lit-scout/0.1"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode("utf-8", errors="replace")
+
+
+def fetch_eprint(query: str, max_results: int = 10) -> list[dict]:
+    """IACR ePrint: the search page gives paper ids; each paper page carries Google-Scholar meta tags
+    (citation_title, citation_author, citation_publication_date) and the abstract. ePrint holds the
+    classical ECC-implementation and arithmetic literature that arXiv does not."""
+    page = _http(EPRINT + "/search?" + urllib.parse.urlencode({"q": query}))
+    ids: list[str] = []
+    for m in re.finditer(r'href="/(\d{4}/\d{3,5})"', page):
+        if m.group(1) not in ids:
+            ids.append(m.group(1))
+        if len(ids) >= max_results:
+            break
+    out = []
+    for pid in ids:
+        try:
+            html = _http(f"{EPRINT}/{pid}")
+        except Exception:  # noqa: BLE001
+            continue
+        meta = dict(re.findall(r'<meta name="(citation_[a-z_]+)" content="([^"]*)"', html))
+        authors = ", ".join(re.findall(r'<meta name="citation_author" content="([^"]*)"', html))[:300]
+        abstract = ""
+        m = re.search(r'<p style="white-space: pre-wrap;">(.*?)</p>', html, re.S) or re.search(r'(?is)abstract.*?<p[^>]*>(.*?)</p>', html)
+        if m:
+            abstract = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+        title = meta.get("citation_title") or (re.search(r"<title>(.*?)</title>", html, re.S) or [None, pid])[1]
+        out.append({"id": f"eprint:{pid}", "title": re.sub(r"\s+", " ", title).strip()[:300], "authors": authors,
+                    "published": (meta.get("citation_publication_date") or meta.get("citation_date") or pid[:4])[:10].replace("/", "-"),
+                    "url": f"{EPRINT}/{pid}", "abstract": abstract[:4000]})
+        time.sleep(1)
+    return out
+
+
 def fetch_url(url: str) -> dict:
     """A blog post or HTML page: strip tags, keep the first ~6000 characters as the 'abstract'."""
     req = urllib.request.Request(url, headers={"User-Agent": "agentlab-lit-scout/0.1"})
@@ -120,17 +160,26 @@ def harvest(cfg: Config, ledger: Ledger, queries: list[str] | None = None, urls:
             per_query: int = 15, recent: bool = False) -> int:
     """recent=True asks arXiv for the newest submissions instead of the most relevant (daily refresh)."""
     new = 0
+    sources = cfg.extra.get("lit_sources") or ["arxiv", "eprint"]
     for q in queries or cfg.extra.get("lit_queries") or DEFAULT_QUERIES:
-        try:
-            papers = fetch_arxiv(q, per_query, sort="submittedDate" if recent else "relevance")
-        except Exception as e:  # noqa: BLE001
-            print(f"[lit-scout] arxiv query failed ({q!r}): {e}")
-            continue
-        for p in papers:
-            if ledger.add_paper(p["id"], p["title"], p["authors"], p["published"], p["url"], p["abstract"], q):
-                new += 1
-        print(f"[lit-scout] {q!r}: {len(papers)} results, {new} new so far", flush=True)
-        time.sleep(3)
+        for src in sources:
+            try:
+                if src == "arxiv":
+                    papers = fetch_arxiv(q, per_query, sort="submittedDate" if recent else "relevance")
+                elif src == "eprint":
+                    if recent:
+                        continue  # ePrint search has no date ordering; the daily refresh is arXiv only
+                    papers = fetch_eprint(q, max(3, per_query // 2))
+                else:
+                    continue
+            except Exception as e:  # noqa: BLE001
+                print(f"[lit-scout] {src} query failed ({q!r}): {e}")
+                continue
+            for p in papers:
+                if ledger.add_paper(p["id"], p["title"], p["authors"], p["published"], p["url"], p["abstract"], q):
+                    new += 1
+            print(f"[lit-scout] {src} {q!r}: {len(papers)} results, {new} new so far", flush=True)
+            time.sleep(3)
     for u in urls or []:
         try:
             p = fetch_url(u)
@@ -222,6 +271,10 @@ def ask(cfg: Config, ledger: Ledger, question: str, max_papers: int = 10) -> str
         papers = fetch_arxiv(question, max_papers)
     except Exception as e:  # noqa: BLE001
         return f"(literature search failed: {e})"
+    try:
+        papers += fetch_eprint(question, max(3, max_papers // 3))
+    except Exception as e:  # noqa: BLE001
+        print(f"[ask] ePrint search failed ({e}); answering from arXiv only", flush=True)
     for p in papers:
         ledger.add_paper(p["id"], p["title"], p["authors"], p["published"], p["url"], p["abstract"], f"ask:{question[:80]}")
     text = "\n\n".join(f"[{p['id']}] {p['title']} ({p['published']}) {p['url']}\n{p['abstract']}" for p in papers)

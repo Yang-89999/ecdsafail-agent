@@ -17,7 +17,7 @@
   agentlab approve <exp> --by NAME    record a human approval
   agentlab submit <exp>               official submit (requires an approval record and an audit)
   agentlab ledger                     summary
-  agentlab lit-scout [--url U ...]    fetch papers (arXiv + optional URLs), extract candidate ideas
+  agentlab lit-scout [--url U ...]    fetch papers (arXiv + IACR ePrint + optional URLs), extract candidate ideas
   agentlab review                     score candidate ideas; accept into the backlog or reject with a reason
   agentlab watch [exp]                readable live view of a solver run (default: the latest)
   agentlab harvest <exp>              copy the notes an earlier run left in its worktree to work/notes (and profile)

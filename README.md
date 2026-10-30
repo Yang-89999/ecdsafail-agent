@@ -112,7 +112,8 @@ Designers can also ask the literature a question mid-run (`bash scripts/ask_lit.
 `agentlab ask "..."` by hand): it searches arXiv for that question, answers with citations, caches the memo
 under `work/lit/`, and files any transferable ideas as candidates. The brainstorm role asks up to two open
 questions per call. Literature queries are in `agentlab/roles/lit_scout.py` (`DEFAULT_QUERIES`); override them with
-`lit_queries = [...]` in `agentlab.toml` or `--query` on the command line. The model used by every
+`lit_queries = [...]` in `agentlab.toml` or `--query` on the command line. Sources are arXiv and IACR
+ePrint (`lit_sources = ["arxiv"]` to restrict); `ask` searches both. The model used by every
 role is `model` in `agentlab.toml` (or `AGENTLAB_MODEL`); leave it empty for the Codex default or set
 the exact name shown by `/model` inside `codex`. The ledger records the model for each run.
 

@@ -98,7 +98,8 @@ def _context(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger) -> str:
     for e in ledger.experiments(15):
         d = json.loads(e["details"] or "{}").get("report") or {}
         reports.append({"exp": e["id"], "idea": e["idea_id"], "status": e["status"], "gain": e["gain"],
-                        "what": (d.get("what_changed") or "")[:250], "why": (d.get("why_it_worked_or_not") or "")[:250]})
+                        "what": (d.get("what_changed") or "")[:250], "why": (d.get("why_it_worked_or_not") or "")[:250],
+                        "variants": (d.get("variants") or [])[:8]})
     notes_dir = Path(cfg.runs_dir).parent / "notes"
     notes = ""
     if notes_dir.exists():
@@ -117,7 +118,7 @@ FILES IN src/point_add: {files}
 
 BACKLOG (id, status, title, prior, tries, mean gain, sub-problem): {json.dumps(ideas)[:9000]}
 
-RECENT EXPERIMENTS: {json.dumps(reports)[:6000]}
+RECENT EXPERIMENTS (with the variants each solver scored): {json.dumps(reports)[:10000]}
 
 NOTES LEFT BY RECENT SOLVERS (measured, from their worktrees): {notes[:12000] or '(none)'}
 

@@ -124,4 +124,13 @@ def planner_brief(ledger: Ledger, idea: Idea, best: dict | None) -> str:
         for h in hist:
             sc = f"{h['score']:,}" if h["score"] else "-"
             lines.append(f"  exp #{h['id']}: {h['status']} score {sc} gain {h['gain']} note: {(h['note'] or '')[:200]}")
+        try:
+            from ..config import Config as _C
+            notes = Path(_C.load().runs_dir).parent / "notes"
+            dirs = [str(notes / f"exp{h['id']}") for h in hist if (notes / f"exp{h['id']}").exists()]
+            if dirs:
+                lines.append("Read their notes before you start, and continue from where they stopped instead of "
+                             "repeating them: " + " ".join(dirs))
+        except Exception:  # noqa: BLE001
+            pass
     return "\n".join(lines)

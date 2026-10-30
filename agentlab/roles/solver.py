@@ -50,7 +50,7 @@ Your working directory is a git worktree of the challenge repository: {wt}
 RULES (from the competition; violating any of them makes the run worthless):
 {adapter.rules_text()}
 
-HOW TO SCORE (cheap, {fast_shots} shots; takes several minutes because the circuit generator is slow):
+HOW TO SCORE (cheap, {fast_shots} shots; about 30 seconds, so score often):
     bash {scripts}/fast_score.sh {wt} {fast_shots} {adapter.root}
 The last line of its output is JSON: {{"ok": true, "score": ..., "metrics": {{"toffoli": ..., "qubits": ...}}}}.
 Only a run that prints ok=true counts. Never edit results.tsv or score.json by hand.
@@ -76,7 +76,8 @@ final message with exactly one fenced JSON block:
   "toffoli": <number or null>, "qubits": <int or null>,
   "what_changed": "<two sentences>",
   "why_it_worked_or_not": "<two sentences>",
-  "next_ideas": ["<concrete follow-up>", "..."]}}
+  "next_ideas": ["<concrete follow-up>", "..."],
+  "variants": [{{"change": "<one line>", "ok": true|false, "toffoli": <number or null>, "qubits": <int or null>}}, "..."]}}
 ```
 """
 

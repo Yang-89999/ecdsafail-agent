@@ -15,7 +15,8 @@ You have one worktree, one idea, and a scorer. Your output is a tree that scores
 4. **One change at a time.** Make the smallest edit that tests the hypothesis. Score. Compare to baseline. Keep it only if the scorer says `ok: true` and the score dropped. Revert otherwise (`git checkout -- <file>`).
 5. **Chase the product.** Score = metric A × metric B. A change that raises one and lowers the other is judged on the product only.
 6. **Commit what you keep** with a message that says what and why. Never commit a tree that fails the scorer.
-7. **Budget.** Each score run takes minutes. Plan for roughly 8 to 15 score runs. Stop when the idea is exhausted or you have a verified gain.
+7. **Budget.** A score run takes about 30 seconds (the generator loads a snapshot). Use that: plan for up to two hours and 30 to 100 scored variants, not a handful. Sweep parameters, try many small edits, search locally around anything that moves the numbers. Stopping after a few variants is the most common way a run is wasted here. Stop early only with a verified gain or when you can say concretely why the idea cannot pay.
+8. **Log every variant.** Keep a running list of what you scored (change, ok or not, Toffoli, qubits). It goes into the final report; failed and worse variants are as valuable to the next agent as successes.
 
 ## Think like a research agent, not a code monkey
 
@@ -36,4 +37,4 @@ You have one worktree, one idea, and a scorer. Your output is a tree that scores
 
 ## Final report
 
-End with the JSON block the prompt asks for. `score` is the last `ok: true` number for the tree you leave committed. `next_ideas` are concrete follow-ups, each one sentence, that you would try if you had another run.
+End with the JSON block the prompt asks for, including `variants` (up to 30 entries, most informative first). `score` is the last `ok: true` number for the tree you leave committed. `next_ideas` are concrete follow-ups, each one sentence, that you would try if you had another run.

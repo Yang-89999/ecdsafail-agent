@@ -109,7 +109,11 @@ def _context(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger) -> str:
     best = ledger.best()
     prev = problem_path(cfg)
     prev_txt = prev.read_text()[:6000] if prev.exists() else "(none yet)"
-    return f"""PUBLIC BAR: {dict(best) if best else '?'}
+    from .lessons import lessons_text
+    return f"""LESSONS SO FAR (work/lessons.md; verified facts, dead ends, what moved the numbers):
+{lessons_text(cfg) or '(none yet)'}
+
+PUBLIC BAR: {dict(best) if best else '?'}
 
 MEASURED PROFILE:
 {prof}

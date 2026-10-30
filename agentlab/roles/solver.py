@@ -46,6 +46,8 @@ def make_worktree(cfg: Config, adapter: CompetitionAdapter, exp_id: int, base_re
 def solver_prompt(cfg: Config, adapter: CompetitionAdapter, brief: str, wt: Path, fast_shots: int) -> str:
     scripts = Path(cfg.skills_dir).parent / "scripts"
     skill_core = load_skill(cfg, "solver-core")
+    from .lessons import lessons_text
+    lessons = lessons_text(cfg) or "(none yet)"
     skill_domain = (load_skill(cfg, "reversible-arith") + "\n\n" + load_skill(cfg, "rust-circuit-dev")
                     + "\n\n" + load_skill(cfg, "design-passes"))
     return f"""You are a Solver in an autoresearch system working on the ECDSA.fail benchmark.
@@ -66,6 +68,9 @@ one primitive in this gate set). Ask at most 3 questions per run; read the answe
 
 YOUR TASK
 {brief}
+
+LESSONS FROM EARLIER RUNS (work/lessons.md; read before you plan, do not repeat a dead end):
+{lessons}
 
 {skill_core}
 

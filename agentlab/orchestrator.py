@@ -247,6 +247,11 @@ def _on_finished(cfg, adapter, ledger, fut: Future, r: dict, audit_threshold, st
         return
     state["fails"] = 0
     finished_since.append(exp_id)
+    try:  # digest the run into work/lessons.md before the Coordinator's next decision
+        from .roles.lessons import learn
+        learn(cfg, adapter, ledger, [exp_id])
+    except Exception as ex:  # noqa: BLE001
+        print(f"  [lessons] failed: {ex}", flush=True)
     if e["status"] == "scored" and e["gain"] is not None and e["gain"] > audit_threshold:
         print(f"  -> beats the bar on the fast score; auditing #{exp_id} (full official run)", flush=True)
         try:

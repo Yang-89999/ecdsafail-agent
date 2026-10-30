@@ -160,7 +160,12 @@ def _context(cfg, adapter, ledger, running: list[dict], finished: list[int], fre
         r.pop("notes_excerpt", None)
     log = log_path(cfg)
     prev = log.read_text()[-4000:] if log.exists() else "(first decision)"
-    return f"""PUBLIC BAR: {dict(best) if best else '?'}   (gain = (bar - score) / bar; fast-score noise about 0.02 %)
+    from .lessons import lessons_text
+    lessons = lessons_text(cfg) or "(none yet)"
+    return f"""LESSONS SO FAR (work/lessons.md, revised after every run; what the system has learned):
+{lessons}
+
+PUBLIC BAR: {dict(best) if best else '?'}   (gain = (bar - score) / bar; fast-score noise about 0.02 %)
 
 PROBLEM STATEMENT (Strategist):
 {problem or '(none yet)'}

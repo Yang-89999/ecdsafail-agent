@@ -95,6 +95,7 @@ agentlab review                          # score candidates: accept into the bac
 agentlab ideas                           # the backlog, with status, prior and the reviewer's note
 agentlab run --rounds 3 --solvers 2      # 6 executor runs on 2 parallel slots, the Coordinator deciding each launch
 agentlab coordinator                     # the Coordinator's last decisions (options, decision, launches, retirements)
+agentlab lessons                         # what the system has learned so far (revised after every run, read by every agent)
 agentlab watch [exp]                     # readable live view of a solver run (second terminal)
 agentlab ledger                          # what happened
 agentlab audit 12                        # clean-room + official benchmark for experiment 12

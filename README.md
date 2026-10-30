@@ -96,6 +96,7 @@ agentlab ideas                           # the backlog, with status, prior and t
 agentlab run --rounds 3 --solvers 2      # 6 executor runs on 2 parallel slots, the Coordinator deciding each launch
 agentlab coordinator                     # the Coordinator's last decisions (options, decision, launches, retirements)
 agentlab lessons                         # what the system has learned so far (revised after every run, read by every agent)
+agentlab trend -n 30                     # leaderboard history: measured score per merged submission, what each step changed, synthesis -> work/trend.md
 agentlab watch [exp]                     # readable live view of a solver run (second terminal)
 agentlab ledger                          # what happened
 agentlab audit 12                        # clean-room + official benchmark for experiment 12

@@ -11,6 +11,7 @@
   agentlab status                     running runs, the Coordinator's latest decision, the ledger (rewritten every minute)
   agentlab coordinator [-n 5]         the Coordinator's last decisions (work/coordinator.md)
   agentlab lessons                    what the system has learned (work/lessons.md); `agentlab learn 12 13` revises it by hand
+  agentlab trend [-n 30] [--landmarks 40] [--no-measure]   leaderboard history: measured score per merged submission, what each step changed, synthesis -> work/trend.md
   agentlab score <worktree> [--shots] fast score of any worktree
   agentlab audit <exp>                clean-room + official benchmark for one experiment
   agentlab approve <exp> --by NAME    record a human approval
@@ -48,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("brainstorm"); sub.add_parser("status"); sub.add_parser("strategy")
     p = sub.add_parser("coordinator"); p.add_argument("-n", type=int, default=5)
     sub.add_parser("lessons"); p = sub.add_parser("learn"); p.add_argument("exps", type=int, nargs="+")
+    p = sub.add_parser("trend"); p.add_argument("-n", type=int, default=30); p.add_argument("--landmarks", type=int, default=0)
+    p.add_argument("--no-measure", action="store_true")
     p = sub.add_parser("ask"); p.add_argument("question", nargs="+")
     p = sub.add_parser("score"); p.add_argument("worktree", type=Path); p.add_argument("--shots", type=int, default=None)
     p = sub.add_parser("audit"); p.add_argument("exp", type=int)
@@ -142,6 +145,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             parts = p.read_text().split("\n## ")
             print("\n## ".join(parts[-a.n:]) if len(parts) > a.n else p.read_text())
+    elif a.cmd == "trend":
+        from .roles.trend import analyse
+        analyse(cfg, adapter, ledger, a.n, a.landmarks, do_measure=not a.no_measure)
     elif a.cmd == "lessons":
         from .roles.lessons import lessons_text
         print(lessons_text(cfg, 100000) or "no lessons yet (written after every finished run during `agentlab run`)")

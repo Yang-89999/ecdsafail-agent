@@ -110,7 +110,11 @@ def _context(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger) -> str:
     prev = problem_path(cfg)
     prev_txt = prev.read_text()[:6000] if prev.exists() else "(none yet)"
     from .lessons import lessons_text
-    return f"""LESSONS SO FAR (work/lessons.md; verified facts, dead ends, what moved the numbers):
+    from .trend import trend_text
+    return f"""LEADERBOARD TREND (work/trend.md: measured history of merged submissions and its synthesis; the head is the baseline to beat, not the only framework):
+{trend_text(cfg) or '(not analysed yet)'}
+
+LESSONS SO FAR (work/lessons.md; verified facts, dead ends, what moved the numbers):
 {lessons_text(cfg) or '(none yet)'}
 
 PUBLIC BAR: {dict(best) if best else '?'}

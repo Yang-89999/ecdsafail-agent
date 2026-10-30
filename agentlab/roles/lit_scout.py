@@ -36,6 +36,17 @@ DEFAULT_QUERIES = [
     "quantum circuit optimization reversible synthesis Toffoli depth width tradeoff",
     "secp256k1 quantum Shor resource",
     "space-time tradeoff quantum arithmetic qubits",
+    # adjacent fields the competitors are less likely to have mined
+    "exact synthesis reversible circuit SAT minimum Toffoli count",
+    "AND-inverter graph resynthesis multiplicative complexity minimization",
+    "logic optimization XOR-AND graph multiplicative complexity cryptographic circuits",
+    "T-count optimization quantum circuit relative phase Toffoli",
+    "pebble game reversible computation space time tradeoff",
+    "constant-time modular inversion algorithm Bernstein Yang safegcd",
+    "elliptic curve point addition hardware implementation modular inversion FPGA",
+    "Montgomery multiplication lazy reduction elliptic curve arithmetic",
+    "carry-save adder quantum circuit ancilla",
+    "quantum lookup table QROM unary iteration uncomputation measurement",
 ]
 
 ARXIV = "http://export.arxiv.org/api/query?"

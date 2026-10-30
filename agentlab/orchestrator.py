@@ -131,6 +131,7 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
     base_ref = f"{cfg.upstream_remote}/{cfg.upstream_branch}"
     state = {"t0": time.time(), "deadline": time.time() + hours * 3600 if hours else None, "launched": 0, "finished": 0,
              "fails": 0, "pause_until": 0.0, "last_lit": time.time(), "last_decision": 0.0, "empty_decisions": 0}
+    _maybe_trend(cfg, adapter, ledger)
     _maybe_strategize(cfg, adapter, ledger, state, force=True)
     if hours:
         print(f"launching runs for {_fmt(hours * 3600)} (until {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(state['deadline']))}) "
@@ -276,6 +277,22 @@ def _close_unit(cfg: Config, ledger: Ledger, state: dict) -> None:
     text = (Path(cfg.runs_dir).parent / "status.md").read_text()
     (units / f"unit-{n:02d}-{time.strftime('%Y%m%d-%H%M', time.gmtime())}.md").write_text(text)
     print(f"\n===== unit {n} finished =====\n{text}", flush=True)
+
+
+def _maybe_trend(cfg, adapter, ledger) -> None:
+    """Leaderboard trend in a background thread when upstream merged something since the last analysis
+    (measuring ~30 commits takes about an hour; the Strategist's next revision reads the result)."""
+    import threading
+    from .roles.trend import analyse, stale
+    if cfg.backend == "dry" or not stale(cfg, adapter):
+        return
+    def go():
+        try:
+            analyse(cfg, adapter, ledger)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [trend] failed: {e}", flush=True)
+    print("  [trend] leaderboard history changed: measuring and analysing it in the background", flush=True)
+    threading.Thread(target=go, daemon=True, name="trend").start()
 
 
 def _maybe_strategize(cfg, adapter, ledger, state, force: bool = False, every: int = 6) -> None:

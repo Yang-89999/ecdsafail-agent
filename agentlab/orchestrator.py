@@ -167,6 +167,10 @@ def _one_round(cfg, adapter, ledger, rng, solvers, audit_threshold, base_ref, st
     _maybe_strategize(cfg, adapter, ledger, state)
     picks = []
     ideas = ledger.ideas("open")
+    last = ledger.experiments(1)
+    if last and last[0]["idea_id"] and getattr(ledger.idea(last[0]["idea_id"]), "kind", None) == "measurement":
+        optim = [i for i in ideas if getattr(i, "kind", None) != "measurement"]
+        ideas = optim or ideas  # alternate: after a measurement run, an optimisation run
     for _ in range(solvers):
         taken_ids = {p.id for p in picks}
         taken_sub = {getattr(p, "subproblem", None) for p in picks} - {None}

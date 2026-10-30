@@ -21,7 +21,7 @@ Under each open sub-problem list hypotheses: reuse backlog ideas by id where the
 
 ## Measurement versus optimisation
 
-Mark each hypothesis `measurement` (it produces numbers, not a gain: executed attribution, a lifetime census, a small-modulus count) or `optimisation`. Measurements that your ceilings depend on are scheduled first and once; say in `first_experiment` exactly what file the numbers must land in (`src/point_add/memory/<name>.md`) so the next revision can use them.
+Mark each hypothesis `measurement` (it produces numbers, not a gain: executed attribution, a lifetime census, a small-modulus count) or `optimisation`. Measurements that your ceilings depend on are scheduled first and once; keep **at most two** measurement hypotheses open at any time, and never re-issue a measurement whose numbers already exist in the notes (read them; refine the ceiling instead). The point of measuring is to choose a circuit change, so once a sub-problem has numbers, its next hypotheses must be optimisations; say in `first_experiment` exactly what file the numbers must land in (`src/point_add/memory/<name>.md`) so the next revision can use them.
 
 ## Rules
 

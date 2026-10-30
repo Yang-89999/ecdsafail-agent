@@ -156,7 +156,9 @@ def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id
     )
     if idea_id:
         ledger.record_idea_outcome(idea_id, gain if gain is not None else -1.0)
-        if report.get("idea_status") in ("already_implemented", "dead_end"):
+        if getattr(ledger.idea(idea_id), "kind", None) == "measurement" and status == "scored":
+            ledger.set_idea_status(idea_id, "done", review=f"measured in exp {exp_id}; numbers in work/notes/exp{exp_id}/")
+        elif report.get("idea_status") in ("already_implemented", "dead_end"):
             ledger.set_idea_status(idea_id, "exhausted")
     for follow in report.get("next_ideas") or []:
         if isinstance(follow, str) and 10 < len(follow) < 400:

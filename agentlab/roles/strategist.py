@@ -185,7 +185,7 @@ Return JSON matching the schema."""
                     continue
                 ledger.set_idea_status(i.id, "open" if i.status in ("open", "candidate") else i.status,
                                        prior=prior if i.tries == 0 else None)
-                ledger.set_idea_subproblem(i.id, sp["name"])
+                ledger.set_idea_subproblem(i.id, sp["name"], h.get("kind"))
                 stats["updated"] += 1
             elif sp["status"] == "open":
                 why = (f"Sub-problem: {sp['name']} (ceiling {ceiling * 100:.1f} %)\nPredicted gain: {h['predicted_gain'] * 100:.2f} %\n"
@@ -193,7 +193,7 @@ Return JSON matching the schema."""
                 before = len(ledger.ideas(None))
                 new_id = ledger.add_idea(h["title"][:120], why, "strategist", prior=prior, status="open")
                 if len(ledger.ideas(None)) > before:
-                    ledger.set_idea_subproblem(new_id, sp["name"])
+                    ledger.set_idea_subproblem(new_id, sp["name"], h.get("kind"))
                     stats["added"] += 1
     for p in data.get("pruned_ideas", []):
         i = existing.get(p["idea_id"])

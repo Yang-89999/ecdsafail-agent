@@ -89,6 +89,7 @@ class Idea:
     best_gain: float
     review: str | None = None
     subproblem: str | None = None
+    kind: str | None = None
 
 
 class Ledger:
@@ -103,6 +104,8 @@ class Ledger:
             self.db.execute("ALTER TABLE ideas ADD COLUMN review TEXT")
         if "subproblem" not in cols:
             self.db.execute("ALTER TABLE ideas ADD COLUMN subproblem TEXT")
+        if "kind" not in cols:
+            self.db.execute("ALTER TABLE ideas ADD COLUMN kind TEXT")
             self.db.commit()
 
     # ---- ideas -------------------------------------------------------------
@@ -132,8 +135,8 @@ class Ledger:
         )
         self.db.commit()
 
-    def set_idea_subproblem(self, idea_id: int, name: str) -> None:
-        self.db.execute("UPDATE ideas SET subproblem=? WHERE id=?", (name, idea_id))
+    def set_idea_subproblem(self, idea_id: int, name: str, kind: str | None = None) -> None:
+        self.db.execute("UPDATE ideas SET subproblem=?, kind=COALESCE(?, kind) WHERE id=?", (name, kind, idea_id))
         self.db.commit()
 
     def set_idea_status(self, idea_id: int, status: str, review: str | None = None, prior: float | None = None) -> None:

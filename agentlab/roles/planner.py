@@ -79,24 +79,20 @@ def seed_ideas(ledger: Ledger) -> int:
     return n
 
 
-def ucb_pick(ideas: list[Idea], c: float, rng: random.Random | None = None) -> Idea | None:
+def ucb_pick(ideas: list[Idea], c: float, rng: random.Random | None = None, gain_scale: float = 0.01) -> Idea | None:
+    """UCB over relative gains. Gains here are ~1e-3..1e-2, so the exploration bonus is scaled to that
+    (c x gain_scale); untried ideas always rank above tried ones, highest prior first. Without the scale
+    a bonus of ~0.8 made every once-tried idea beat every untried one and the same idea ran twice."""
     rng = rng or random.Random()
     open_ideas = [i for i in ideas if i.status == "open"]
     if not open_ideas:
         return None
+    untried = [i for i in open_ideas if i.tries == 0]
+    if untried:
+        return max(untried, key=lambda i: i.prior + rng.random() * 1e-9)
     total = sum(i.tries for i in open_ideas) + 1
-    best, best_v = None, -1e9
-    for i in open_ideas:
-        if i.tries == 0:
-            mean = i.prior
-            bonus = c
-        else:
-            mean = i.gain_sum / i.tries
-            bonus = c * math.sqrt(math.log(total) / i.tries)
-        v = mean + bonus + rng.random() * 1e-6
-        if v > best_v:
-            best, best_v = i, v
-    return best
+    return max(open_ideas, key=lambda i: i.gain_sum / i.tries
+               + c * gain_scale * math.sqrt(math.log(total) / i.tries) + rng.random() * 1e-9)
 
 
 def planner_brief(ledger: Ledger, idea: Idea, best: dict | None) -> str:
@@ -105,6 +101,14 @@ def planner_brief(ledger: Ledger, idea: Idea, best: dict | None) -> str:
         "SELECT id, status, score, gain, note FROM experiments WHERE idea_id=? ORDER BY id DESC LIMIT 5", (idea.id,)
     ).fetchall()
     lines = [f"IDEA #{idea.id}: {idea.title}", idea.rationale, ""]
+    if getattr(idea, "kind", None) == "measurement":
+        lines += ["This is a MEASUREMENT task: produce the numbers once, in the file named above, then stop. "
+                  "Do not repeat measurements that are already in src/point_add/memory/ or the notes.", ""]
+    else:
+        lines += ["This is an OPTIMISATION task: the run only counts if the submitted circuit changes (different "
+                  "Toffoli count, op count or width from the baseline you measure first). Measurements and notes "
+                  "are only a means to that. If your edit leaves the scorer's numbers identical, the edit did not "
+                  "reach build(): find the path that does (the Strategist's notes on the snapshot/policy route).", ""]
     try:
         from .strategist import formulation_excerpt
         from ..config import Config as _C

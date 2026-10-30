@@ -4,11 +4,12 @@
   agentlab best                       public best from the shared repo
   agentlab scout [-n 15]              merged submissions -> ideas
   agentlab ideas [add "title" "why"]  list / add ideas
-  agentlab run --rounds N --solvers K the loop (or --days 7 / --hours 12 for a long, self-refilling run)
+  agentlab run --rounds N --solvers K  N x K executor runs on K parallel slots (or --hours 5 / --days 7: launch for that long, let runs finish)
   agentlab strategy                   Strategist: formulate, decompose with ceilings, allocate -> work/problem.md
   agentlab brainstorm                 new candidate ideas from the profile and past reports
   agentlab ask "question"             on-demand literature answer for a designer (cited, cached)
-  agentlab status                     the status file a long run writes after every round
+  agentlab status                     running runs, the Coordinator's latest decision, the ledger (rewritten every minute)
+  agentlab coordinator [-n 5]         the Coordinator's last decisions (work/coordinator.md)
   agentlab score <worktree> [--shots] fast score of any worktree
   agentlab audit <exp>                clean-room + official benchmark for one experiment
   agentlab approve <exp> --by NAME    record a human approval
@@ -44,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--audit-threshold", type=float, default=None, help="min fast-score relative gain to trigger an audit (default from config)")
     p.add_argument("--hours", type=float, default=None); p.add_argument("--days", type=float, default=None)
     sub.add_parser("brainstorm"); sub.add_parser("status"); sub.add_parser("strategy")
+    p = sub.add_parser("coordinator"); p.add_argument("-n", type=int, default=5)
     p = sub.add_parser("ask"); p.add_argument("question", nargs="+")
     p = sub.add_parser("score"); p.add_argument("worktree", type=Path); p.add_argument("--shots", type=int, default=None)
     p = sub.add_parser("audit"); p.add_argument("exp", type=int)
@@ -131,6 +133,13 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "status":
         p = Path(cfg.runs_dir).parent / "status.md"
         print(p.read_text() if p.exists() else ledger.summary_text())
+    elif a.cmd == "coordinator":
+        p = Path(cfg.runs_dir).parent / "coordinator.md"
+        if not p.exists():
+            print("no decisions yet (the Coordinator writes work/coordinator.md during `agentlab run`)")
+        else:
+            parts = p.read_text().split("\n## ")
+            print("\n## ".join(parts[-a.n:]) if len(parts) > a.n else p.read_text())
     elif a.cmd == "harvest":
         from .roles.solver import harvest_notes
         e = ledger.experiment(a.exp)

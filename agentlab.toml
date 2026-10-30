@@ -9,10 +9,10 @@ backend = "codex"
 model = "gpt-6-astra"   # as shown by /model inside codex; empty = Codex default
 reasoning_effort = "high"
 
-solvers = 2             # parallel solver worktrees per round
+solvers = 2             # parallel executor slots (the Coordinator fills each free slot)
 fast_shots = 1024       # the official run uses 9024; 64 shots showed 0.016 % noise against it
 audit_threshold = 0.0005  # fast-score gain needed before the full official run
-solver_timeout_s = 10800
+solver_timeout_s = 28800  # 8 h safety cap per run; runs end on evidence (gain or no hope), not on the clock
 explore_c = 0.6
 
 submit_only_if_beats_best = true

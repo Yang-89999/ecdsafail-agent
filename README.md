@@ -4,12 +4,18 @@ An evolutionary-search agent system for Yukon-style research boards. First targe
 [ECDSA.fail](https://ecdsa.fail) (reversible secp256k1 point addition, score = Toffoli × qubits).
 Second: sig.golf, through the same core and a new adapter.
 
-The design is in `docs/design.md`. Short version: the official checker is the reward function,
-parallel Solver agents mutate one hypothesis each in their own git worktree, a bandit Planner
-allocates runs across the idea backlog, the Auditor re-runs everything in a clean room with the
-official checker, and nothing is submitted without a recorded human approval. Two reading roles feed
-the backlog: the Literature Scout turns papers and posts into cited candidate ideas, and the Idea
-Reviewer scores each candidate before it can reach a solver.
+The design is in `docs/design.md`. Short version: the official checker is the reward function.
+A planning block runs the search: the Strategist formulates the task as an optimisation problem and
+decomposes it into sub-problems with measured ceilings; the Coordinator (the main agent) assigns
+sub-tasks to parallel executor agents (Solvers, one git worktree each), reads every result as it comes
+back, and decides the next move: a new idea, continuing a run from its own tree, combining several
+branches, retiring an idea, or waiting; it writes each decision in plain language to
+`work/coordinator.md`. A bandit ranking is its hint and its fallback. Runs are asynchronous and have
+no clock: a slow run keeps its slot while the others turn over, and a run ends when its executor finds
+a gain or no hope. The Auditor re-runs anything promising in a clean room with the official checker,
+and nothing is submitted without a recorded human approval. Reading roles feed the backlog: the
+Literature Scout turns papers and posts into cited candidate ideas, the Ask tool answers a designer's
+question with citations, and the Idea Reviewer scores each candidate before it can reach a solver.
 
 ## Layout
 
@@ -41,20 +47,25 @@ Edits to this repo on the Mac are visible inside the container immediately.
 ### Units of work (5 h each) or a week unattended
 
 ```bash
-docker/start.sh                 # one unit = agentlab run --hours 5 --solvers 1, detached; run again for the next unit
+docker/start.sh                 # one unit = agentlab run --hours 5 --solvers 2, detached; run again for the next unit
 docker/start.sh --days 7        # or one long run
 docker/logs.sh                  # follow the log
-docker/shell.sh                 # shell inside: agentlab status | agentlab watch | agentlab approve <exp> --by Yang
+docker/shell.sh                 # shell inside: agentlab status | agentlab coordinator | agentlab watch <exp> | agentlab approve <exp> --by Yang
 docker/stop.sh
 ```
 
-A long run starts with the Strategist (formulation, decomposition into sub-problems with measured ceilings,
-priors from predicted gains) and revises it after every six experiments; solvers get the formulation and
-their sub-problem in the brief, and parallel solvers are spread over different sub-problems. It also refills its own backlog (upstream scout + brainstorm when fewer than 3 ideas are open, one
-arXiv refresh per day, every candidate through the reviewer), waits with exponential backoff when the
-model backend fails fast (usage limits), survives a crashed round, and rewrites `work/status.md` after
-every round with anything waiting for approval. Keep the Mac plugged in with the lid open; `start.sh`
-runs `caffeinate` so it does not sleep.
+A unit starts with the Strategist (formulation, decomposition into sub-problems with measured ceilings,
+priors from predicted gains), revised after every six finished runs. Then the Coordinator fills the two
+executor slots and refills each one as soon as it frees up, feeding every result back into its next
+decision (`work/coordinator.md`). The 5 hours are a launch window: after it nothing new starts, but a run
+in progress is never cut off; the unit ends when the last run finishes (`work/units/`). Between units
+the Mac may sleep; the ledger, worktrees, notes and problem statement carry over, and the next unit's
+Coordinator can continue any earlier run from its tree. The loop also refills its own backlog (upstream
+scout + brainstorm when fewer than 3 ideas are open, one arXiv refresh per day, every candidate through
+the reviewer), waits with exponential backoff when the model backend fails fast (usage limits), and
+rewrites `work/status.md` every minute: the running runs (elapsed, scored variants, best so far, last
+activity), the Coordinator's latest decision, and anything waiting for approval. Keep the Mac plugged
+in with the lid open during a unit; `start.sh` runs `caffeinate` so it does not sleep.
 
 ## Setup (Linux or macOS, without Docker)
 
@@ -82,16 +93,18 @@ agentlab strategy                        # Strategist: formulate the problem, de
 agentlab lit-scout                       # arXiv queries (+ --url for posts) -> papers table -> candidate ideas with citations
 agentlab review                          # score candidates: accept into the backlog (with a prior) or reject with a reason
 agentlab ideas                           # the backlog, with status, prior and the reviewer's note
-agentlab run --rounds 3 --solvers 2      # each round: review pending candidates, pick ideas, run solvers, re-score, audit winners
-agentlab watch                           # readable live view of the latest solver run (second terminal)
+agentlab run --rounds 3 --solvers 2      # 6 executor runs on 2 parallel slots, the Coordinator deciding each launch
+agentlab coordinator                     # the Coordinator's last decisions (options, decision, launches, retirements)
+agentlab watch [exp]                     # readable live view of a solver run (second terminal)
 agentlab ledger                          # what happened
 agentlab audit 12                        # clean-room + official benchmark for experiment 12
 agentlab approve 12 --by Yang            # human gate
 agentlab submit 12                       # refuses unless audited, approved, and strictly better than the bar
 ```
 
-Every solver run leaves `work/runs/exp<N>/{prompt.md,agent.log,report.json}` and a worktree under
-`work/worktrees/exp<N>` with its commits on branch `agentlab/exp<N>`.
+Every solver run leaves `work/runs/exp<N>/{prompt.md,agent.log,report.json}`, its notes under
+`work/notes/exp<N>/`, and a worktree under `work/worktrees/exp<N>` with its commits on branch
+`agentlab/exp<N>`; a later `continue` run starts from that branch and a `combine` run cherry-picks several.
 
 Designers can also ask the literature a question mid-run (`bash scripts/ask_lit.sh "..."` inside a solver,
 `agentlab ask "..."` by hand): it searches arXiv for that question, answers with citations, caches the memo

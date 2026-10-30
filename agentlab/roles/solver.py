@@ -35,7 +35,11 @@ def make_worktree(cfg: Config, adapter: CompetitionAdapter, exp_id: int, base_re
     subprocess.run(["git", "branch", "-D", branch], cwd=adapter.root, capture_output=True)
     subprocess.run(["git", "worktree", "add", "-q", "-b", branch, str(wt), base_ref], cwd=adapter.root, check=True)
     base = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=wt, capture_output=True, text=True).stdout.strip()
-    (wt / ".agentlab").mkdir(exist_ok=True)
+    (wt / ".agentlab").mkdir(exist_ok=True)  # scores.jsonl (live progress) and other scratch of the system
+    exclude = Path(adapter.root) / ".git" / "info" / "exclude"
+    if exclude.parent.exists() and ".agentlab/" not in (exclude.read_text() if exclude.exists() else ""):
+        with exclude.open("a") as f:
+            f.write(".agentlab/\n")
     return wt, base
 
 
@@ -66,6 +70,9 @@ YOUR TASK
 {skill_core}
 
 {skill_domain}
+
+There is no clock on this run. Stop when you have a verified gain with no cheap next step, or when your evidence says the
+direction is hopeless; not because time passed. Do not leave the run early with a tree you have not scored.
 
 WHEN DONE, commit your changes inside the worktree (git add src/point_add && git commit -m "...") and end your
 final message with exactly one fenced JSON block:
@@ -103,18 +110,32 @@ def harvest_notes(cfg: Config, wt: Path, base: str, exp_id: int, title: str) -> 
 
 
 def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id: int | None, brief: str,
-               base_ref: str, best: dict | None) -> int:
+               base_ref: str, best: dict | None, exp_id: int | None = None, mode: str = "new",
+               parents: list[int] | None = None) -> int:
+    """One executor run. mode "new": fresh worktree at base_ref (the upstream head). "continue": the worktree
+    starts from the parent experiment's final tree (branch agentlab/exp<parent>) and keeps the parent's base
+    commit, so the audit's cherry-pick range covers both runs. "combine": fresh worktree at base_ref; the brief
+    tells the agent which branches to cherry-pick."""
     backend = make_backend(cfg)
-    exp_id = ledger.start_experiment(idea_id, "", "", cfg.model or cfg.backend, note=brief.splitlines()[0][:200])
-    wt, base = make_worktree(cfg, adapter, exp_id, base_ref)
-    ledger.finish_experiment(exp_id, "running", worktree=str(wt), base_commit=base)
+    parents = list(parents or [])
+    if exp_id is None:
+        exp_id = ledger.start_experiment(idea_id, "", "", cfg.model or cfg.backend, note=brief.splitlines()[0][:200])
+    if mode == "continue" and parents:
+        parent = ledger.experiment(parents[0])
+        wt, head0 = make_worktree(cfg, adapter, exp_id, f"agentlab/exp{parents[0]}")
+        base = (parent["base_commit"] if parent and parent["base_commit"] else head0)
+    else:
+        wt, base = make_worktree(cfg, adapter, exp_id, base_ref)
+    ledger.finish_experiment(exp_id, "running", worktree=str(wt), base_commit=base, mode=mode, parents=json.dumps(parents),
+                             note=brief.splitlines()[0][:200])
     prompt = solver_prompt(cfg, adapter, brief, wt, cfg.fast_shots)
     run_dir = Path(cfg.runs_dir) / f"exp{exp_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "prompt.md").write_text(prompt)
 
     t0 = time.time()
-    print(f"[agentlab] solver exp #{exp_id} started on idea {idea_id}; follow it with: tail -f {run_dir / 'agent.log'}", flush=True)
+    print(f"[agentlab] solver exp #{exp_id} ({mode}{' of ' + str(parents) if parents else ''}) started on idea {idea_id}; "
+          f"follow it with: agentlab watch {exp_id}", flush=True)
     run = backend.run(prompt, wt, run_dir / "agent.log", extra_dirs=[Path(cfg.skills_dir).parent / "tools"])
     print(f"[agentlab] solver exp #{exp_id} agent finished after {int(run.duration_s) // 60} min (exit {run.returncode}); re-scoring its tree", flush=True)
     report: dict = {}

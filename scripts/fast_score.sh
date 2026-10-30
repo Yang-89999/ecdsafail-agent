@@ -12,6 +12,9 @@ set -euo pipefail
 # shellcheck disable=SC1091
 . "$HOME/.cargo/env" 2>/dev/null || true
 wt="$(cd "${1:?worktree}" && pwd -P)"
+# Every result also goes to <worktree>/.agentlab/scores.jsonl so the Coordinator and `agentlab status`
+# can see a running solver's progress (attempts, scored variants, best so far) without waiting for it.
+record() { mkdir -p "$wt/.agentlab"; python3 -c "import json,sys,time; d=json.loads(sys.argv[1]); d['ts']=time.time(); print(json.dumps(d))" "$1" >> "$wt/.agentlab/scores.jsonl" 2>/dev/null || true; echo "$1"; }
 shots="${2:-64}"
 here="$(cd "$(dirname "$0")/.." && pwd -P)"
 challenge="${3:-$(dirname "$wt")/../ecdsafail-challenge}"
@@ -53,7 +56,7 @@ tail -3 "$scratch/build.log"
 echo "build_circuit: exit $rc, $(( $(date +%s) - t0 ))s"
 if [[ $rc -ne 0 || ! -s "$scratch/ops.bin" ]]; then
   echo "!! build_circuit failed (exit $rc) or produced no ops.bin"
-  echo '{"ok": false, "reason": "build_circuit failed"}'
+  record '{"ok": false, "reason": "build_circuit failed"}'
   exit 1
 fi
 
@@ -65,7 +68,7 @@ rc=$?
 set -e
 echo "fast_eval: exit $rc, $(( $(date +%s) - t1 ))s"
 if [[ $rc -ne 0 || ! -s "$scratch/score.json" ]]; then
-  echo '{"ok": false, "reason": "fast_eval rejected the circuit (see report above)"}'
+  record '{"ok": false, "reason": "fast_eval rejected the circuit (see report above)"}'
   exit 1
 fi
-python3 -c "import json,sys; d=json.load(open('$scratch/score.json')); d['ok']=True; d['shots']=$shots; print(json.dumps(d))"
+record "$(python3 -c "import json,sys; d=json.load(open('$scratch/score.json')); d['ok']=True; d['shots']=$shots; print(json.dumps(d))")"

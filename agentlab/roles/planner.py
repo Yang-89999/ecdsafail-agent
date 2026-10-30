@@ -95,6 +95,27 @@ def ucb_pick(ideas: list[Idea], c: float, rng: random.Random | None = None, gain
                + c * gain_scale * math.sqrt(math.log(total) / i.tries) + rng.random() * 1e-9)
 
 
+def bandit_picks(ledger: Ledger, cfg, rng: random.Random, n: int, exclude: set | None = None) -> list[Idea]:
+    """n ideas by UCB, spread across sub-problems, never two measurements in a row, nothing already running.
+    The Coordinator gets this list as a hint and the loop falls back to it when the Coordinator has no answer."""
+    exclude = exclude or set()
+    ideas = [i for i in ledger.ideas("open") if i.id not in exclude]
+    last = ledger.experiments(1)
+    if last and last[0]["idea_id"] and getattr(ledger.idea(last[0]["idea_id"]), "kind", None) == "measurement":
+        optim = [i for i in ideas if getattr(i, "kind", None) != "measurement"]
+        ideas = optim or ideas  # alternate: after a measurement run, an optimisation run
+    picks: list[Idea] = []
+    for _ in range(n):
+        taken_ids = {p.id for p in picks}
+        taken_sub = {getattr(p, "subproblem", None) for p in picks} - {None}
+        pool = [i for i in ideas if i.id not in taken_ids and getattr(i, "subproblem", None) not in taken_sub]
+        idea = ucb_pick(pool or [i for i in ideas if i.id not in taken_ids], cfg.explore_c, rng)
+        if not idea:
+            break
+        picks.append(idea)
+    return picks
+
+
 def planner_brief(ledger: Ledger, idea: Idea, best: dict | None) -> str:
     """Context the solver gets: what the backlog knows and what to do now."""
     hist = ledger.db.execute(

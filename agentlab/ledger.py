@@ -106,7 +106,11 @@ class Ledger:
             self.db.execute("ALTER TABLE ideas ADD COLUMN subproblem TEXT")
         if "kind" not in cols:
             self.db.execute("ALTER TABLE ideas ADD COLUMN kind TEXT")
-            self.db.commit()
+        ecols = {r[1] for r in self.db.execute("PRAGMA table_info(experiments)")}
+        if "mode" not in ecols:  # new | continue | combine, and the parent experiments of the last two
+            self.db.execute("ALTER TABLE experiments ADD COLUMN mode TEXT")
+            self.db.execute("ALTER TABLE experiments ADD COLUMN parents TEXT")
+        self.db.commit()
 
     # ---- ideas -------------------------------------------------------------
     def add_idea(self, title: str, rationale: str, source: str, prior: float = 0.02, status: str = "open") -> int:
@@ -229,7 +233,8 @@ class Ledger:
         for e in self.experiments(n):
             sc = f"{e['score']:,}" if e["score"] else "-"
             g = f"{e['gain']*100:+.3f}%" if e["gain"] is not None else ""
-            lines.append(f"  #{e['id']} idea={e['idea_id']} {e['status']:9s} score={sc} {g} {e['note'] or ''}".rstrip())
+            mode = f" {e['mode']} {e['parents']}" if e["mode"] and e["mode"] != "new" else ""
+            lines.append(f"  #{e['id']} idea={e['idea_id']}{mode} {e['status']:9s} score={sc} {g} {e['note'] or ''}".rstrip())
         lines.append("Open ideas (tries, mean gain):")
         for i in self.ideas("open"):
             mean = i.gain_sum / i.tries if i.tries else float("nan")

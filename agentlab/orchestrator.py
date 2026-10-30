@@ -145,7 +145,7 @@ def _maybe_strategize(cfg, adapter, ledger, state, force: bool = False, every: i
     if cfg.backend == "dry":
         return
     n_exp = len(ledger.experiments(10000))
-    due = force and not problem_path(cfg).exists() or n_exp - state.get("last_strat_exp", 0) >= every
+    due = force or n_exp - state.get("last_strat_exp", 0) >= every  # every unit starts with a fresh revision
     if not due:
         return
     try:

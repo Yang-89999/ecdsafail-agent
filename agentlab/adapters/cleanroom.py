@@ -152,6 +152,21 @@ class CleanroomAdapter(EcdsaFailAdapter):
         msg = f"clean-room: adopt exp {exp_id} (score {score:,})" if score else f"clean-room: adopt exp {exp_id}"
         c = _git(ROOT, "commit", "-q", "-m", msg)
         new = _git(r, "rev-parse", "--short", "main").stdout.strip()
+        # The audit already measured this exact tree: seed the base caches so the loop does not re-measure it.
+        full, fresh = verdict.get("full") or {}, verdict.get("fresh") or {}
+        if full.get("score") and _git(r, "rev-parse", "main^{tree}").stdout == _git(clean_wt, "rev-parse", "HEAD^{tree}").stdout:
+            work = Path(self.cfg.ledger_path).parent
+            bb = work / "base_best.json"
+            data = json.loads(bb.read_text()) if bb.exists() else {}
+            m = full.get("metrics") or {}
+            data[new] = {"score": full["score"], "toffoli": m.get("toffoli"), "qubits": m.get("qubits"), "commit": new,
+                         "ts": int(time.time()), "measured_here": True, "from_audit": exp_id}
+            bb.write_text(json.dumps(data, indent=2))
+            if "draws" in fresh:
+                hf = Path(self.cfg.runs_dir).parent / "head_fresh.json"
+                d2 = json.loads(hf.read_text()) if hf.exists() else {}
+                d2[f"{new}@{self.cfg.fresh_draws}x{self.cfg.fast_shots}"] = dict(fresh, commit=new)
+                hf.write_text(json.dumps(d2, indent=1))
         return f"adopted as base {new}" + ("" if c.returncode == 0 else f" (agent repo commit failed: {c.stderr[-200:]})")
 
     # --- rules -------------------------------------------------------------------

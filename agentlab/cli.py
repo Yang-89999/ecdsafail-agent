@@ -75,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
     ledger = Ledger(cfg.ledger_path)
     adapter = load_adapter(cfg)
 
+    if adapter.kind == "cleanroom" and a.cmd in ("scout", "trend", "submit"):
+        sys.exit(f"`agentlab {a.cmd}` reads or writes the leaderboard; it is off on the clean-room track")
     if a.cmd == "setup":
         adapter.ensure_ready()
         print("ready:", adapter.root)

@@ -25,7 +25,8 @@ skills/              SKILL.md packs the agents are prompted with (core + per-boa
 scripts/             fast_score.sh (cheap metric), build_fast_eval.sh
 tools/fast_eval/     the harness's trusted evaluator, built with a configurable shot count
 work/                ledger.sqlite, worktrees/, runs/<exp>/ (prompt, agent log, report)  [git-ignored]
-agentlab.toml        configuration
+cleanroom/point_add/ our own point adder (clean-room track), docs/cleanroom.md its brief
+agentlab.toml        configuration (agentlab-cleanroom.toml: overlay for the clean-room track)
 ```
 
 ## Run in Docker (recommended on a Mac)
@@ -69,6 +70,22 @@ the reviewer), waits with exponential backoff when the model backend fails fast 
 rewrites `work/status.md` every minute: the running runs (elapsed, scored variants, best so far, last
 activity), the Coordinator's latest decision, and anything waiting for approval. Keep the Mac plugged
 in with the lid open during a unit; `start.sh` runs `caffeinate` so it does not sleep.
+
+### Clean-room track: our own circuit
+
+`cleanroom/point_add/` is our own secp256k1 point adder, written from published algorithms (no
+leaderboard code), with unit tests on the harness simulator. Goal: below Google's 2.1M Toffoli x 1,425
+qubits = 2.99e9 at an error rate of at most 1e-4. Brief and milestones: `docs/cleanroom.md`.
+
+```bash
+docker/start.sh --cleanroom     # same loop, on work/cleanroom/ (own ledger, backlog, lessons, base)
+```
+
+The first start builds `work/cleanroom/harness`, a git repository with only the harness files and our
+module (no leaderboard history), and measures our base. Every run starts from that base; an audited
+gain (unit tests, official run, fresh-input error <= 1e-4, strictly better than the base) becomes the new
+base automatically and is committed to `cleanroom/point_add` here. Nothing from this track is submitted.
+`agentlab status` inside the container shows our base and how far it is from the target.
 
 ## Setup (Linux or macOS, without Docker)
 

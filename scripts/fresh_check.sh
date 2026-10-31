@@ -22,7 +22,7 @@ here="$(cd "$(dirname "$0")/.." && pwd -P)"
 challenge="${4:-$(dirname "$wt")/../ecdsafail-challenge}"
 fast_eval="$here/tools/fast_eval/target/release/fast_eval"
 stamp="$here/tools/fast_eval/.agentlab-version"
-if [[ ! -x "$fast_eval" || "$(cat "$stamp" 2>/dev/null)" != "2" ]]; then
+if [[ ! -x "$fast_eval" || "$(cat "$stamp" 2>/dev/null)" != "3" ]]; then
   bash "$here/scripts/build_fast_eval.sh" "$challenge" >&2
 fi
 

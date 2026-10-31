@@ -76,6 +76,26 @@ class EcdsaFailAdapter(CompetitionAdapter):
             None, log, self.cfg.solver_timeout_s, f"fast score ({shots} shots)")
         return self._parse(out, rc, shots, str(log), time.time() - t0)
 
+    def fresh_check(self, worktree: Path, draws: int = 8, shots: int = 9024) -> dict:
+        """The same op stream tested on `draws` independent input sets (scripts/fresh_check.sh). The official
+        harness tests one draw derived from the circuit's hash; this shows the real failure rate and the average
+        Toffoli over many draws. Returns the script's JSON (ok, passed, failed_shots, mean_toffoli, ...)."""
+        t0 = time.time()
+        log = Path(worktree) / ".agentlab" / f"fresh_{int(t0)}.log"
+        log.parent.mkdir(exist_ok=True)
+        rc, out = _run_logged(
+            ["bash", str(SCRIPTS / "fresh_check.sh"), str(worktree), str(draws), str(shots), str(self.root)],
+            None, log, self.cfg.solver_timeout_s, f"fresh-inputs check ({draws} draws)")
+        for line in reversed(out.strip().splitlines()):
+            if line.startswith("{"):
+                try:
+                    res = json.loads(line)
+                    res["log"] = str(log)
+                    return res
+                except json.JSONDecodeError:
+                    break
+        return {"ok": False, "reason": f"fresh_check produced no result (exit {rc})", "log": str(log)}
+
     def full_verify(self, worktree: Path, note: str = "") -> ScoreResult:
         t0 = time.time()
         log = Path(worktree) / ".agentlab" / f"full_{int(t0)}.log"
@@ -114,7 +134,10 @@ class EcdsaFailAdapter(CompetitionAdapter):
             "(target_x, target_y) with the affine sum on secp256k1.\n"
             "Validity: all shots classically correct; every freed ancilla back to |0>; zero global phase; "
             "forward then reverse restores every qubit. A Toffoli saving that breaks any of these is a FAIL, not a win.\n"
-            "Score = average executed Toffoli per shot x peak qubit width. Lower is better."
+            "Score = average executed Toffoli per shot x peak qubit width. Lower is better.\n"
+            "Never tune to the test set: do not change TAIL_NONCE or any other value whose only effect is which test "
+            "inputs are drawn, and never choose between variants by whether their draw happened to pass. A candidate "
+            "counts only if it also passes scripts/fresh_check.sh (independent input draws)."
         )
 
     # --- submission ----------------------------------------------------------

@@ -43,11 +43,14 @@ def make_worktree(cfg: Config, adapter: CompetitionAdapter, exp_id: int, base_re
     return wt, base
 
 
-def solver_prompt(cfg: Config, adapter: CompetitionAdapter, brief: str, wt: Path, fast_shots: int) -> str:
+def solver_prompt(cfg: Config, adapter: CompetitionAdapter, brief: str, wt: Path, fast_shots: int,
+                  best: dict | None = None) -> str:
     scripts = Path(cfg.skills_dir).parent / "scripts"
     skill_core = load_skill(cfg, "solver-core")
     from .lessons import lessons_text
     lessons = lessons_text(cfg) or "(none yet)"
+    from ..orchestrator import fresh_line
+    head_fresh = fresh_line((best or {}).get("fresh"))
     skill_domain = (load_skill(cfg, "reversible-arith") + "\n\n" + load_skill(cfg, "rust-circuit-dev")
                     + "\n\n" + load_skill(cfg, "design-passes"))
     return f"""You are a Solver in an autoresearch system working on the ECDSA.fail benchmark.
@@ -67,6 +70,16 @@ SWEEPING MANY VARIANTS (the main way to work; it runs unattended while you think
 Write a small mutation script (or a folder of patches) that turns one knob of your idea, commit your tree, and sweep.
 Each variant is applied to the committed tree, scored, logged to .agentlab/sweep.jsonl and reverted; --keep-best
 leaves the best winner applied for you to check and commit. Then sweep around the winner.
+
+FRESH INPUTS (the honesty check; run it on your final candidate and on any variant you are about to keep):
+    bash {scripts}/fresh_check.sh {wt} {cfg.fresh_draws} {fast_shots} {adapter.root}
+The official scorer tests ONE input draw, derived from a hash of the op stream; any edit redraws it. fresh_check tests
+the same circuit on {cfg.fresh_draws} independent draws and prints failures per draw and the average Toffoli across draws.
+The unmodified public head on fresh inputs: {head_fresh}
+So: (1) a failure on the new draw that the unmodified head also shows on fresh draws is INHERITED; do not spend the run
+explaining or repairing it unless your plan is a correct circuit that still beats the bar. (2) A variant that wins on
+the official draw but not on the fresh-draw average won by luck: it is not a gain. (3) Never change TAIL_NONCE or any
+value whose only effect is which inputs get drawn, and never pick a variant because its draw passed.
 
 ASKING THE LITERATURE (allowed network use; 1-3 min; answers are cached and cited):
     bash {scripts}/ask_lit.sh "<one specific technical question>"
@@ -140,7 +153,7 @@ def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id
         wt, base = make_worktree(cfg, adapter, exp_id, base_ref)
     ledger.finish_experiment(exp_id, "running", worktree=str(wt), base_commit=base, mode=mode, parents=json.dumps(parents),
                              note=brief.splitlines()[0][:200])
-    prompt = solver_prompt(cfg, adapter, brief, wt, cfg.fast_shots)
+    prompt = solver_prompt(cfg, adapter, brief, wt, cfg.fast_shots, best)
     run_dir = Path(cfg.runs_dir) / f"exp{exp_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "prompt.md").write_text(prompt)

@@ -109,6 +109,8 @@ def write_status(cfg: Config, ledger: Ledger, state: dict, running: dict | None 
     lines = [f"# agentlab status  ({time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())})", "",
              f"launched: {state['launched']}   finished: {state['finished']}   elapsed: {_fmt(time.time() - state['t0'])}{window}",
              f"backend failures in a row: {state['fails']}", ""]
+    if best and best.get("fresh"):
+        lines += [f"public head on fresh inputs: {fresh_line(best['fresh'])}", ""]
     if running:
         lines += ["## Running now", ""] + _running_rows(cfg, ledger, running, best) + [""]
     else:
@@ -216,7 +218,47 @@ def _refresh_best(cfg, adapter, ledger):
     if best:
         ledger.record_best(best["score"], best["toffoli"], best["qubits"], f"upstream:{best['commit']}", verified=True)
         best = dict(best, fast_score=fast_baseline(cfg, adapter, best["commit"]))
+        fresh = head_fresh(cfg, adapter, best["commit"])
+        if fresh:
+            best["fresh"] = fresh
     return best
+
+
+def head_fresh(cfg, adapter, commit: str) -> dict | None:
+    """The upstream head on fresh inputs (scripts/fresh_check.sh, cfg.fresh_draws independent draws), cached per
+    commit. The public head's official draw comes from a hash its authors can re-roll (TAIL_NONCE), so its own
+    pass/fail and average Toffoli on that one draw can be luckier than the circuit is. Everyone in the system
+    gets this line: failures that also happen on the unmodified head are inherited, not caused by an edit."""
+    cache = Path(cfg.runs_dir).parent / "head_fresh.json"
+    data = json.loads(cache.read_text()) if cache.exists() else {}
+    key = f"{commit}@{cfg.fresh_draws}x{cfg.fast_shots}"
+    if key in data:
+        return data[key]
+    wt = Path(cfg.worktrees_dir) / "baseline"
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=adapter.root, capture_output=True)
+    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(wt), commit], cwd=adapter.root, check=True)
+    res = adapter.fresh_check(wt, cfg.fresh_draws, cfg.fast_shots)
+    if "draws" not in res:
+        print(f"  [baseline] fresh-inputs check of upstream {commit} failed: {res.get('reason')}", flush=True)
+        return None
+    res["commit"] = commit
+    data[key] = res
+    cache.write_text(json.dumps(data, indent=1))
+    print(f"  [baseline] upstream {commit} on fresh inputs: {fresh_line(res)}", flush=True)
+    return res
+
+
+def fresh_line(f: dict | None) -> str:
+    """One line for prompts and status: how the public head behaves on inputs it was not tuned to."""
+    if not f or "draws" not in f:
+        return "(not measured yet)"
+    per = f["failed_shots"] / max(1, f["draws"])
+    tof = f"average Toffoli {f['mean_toffoli']:,.1f} (sd {f['sd_toffoli'] or 0:,.1f} between draws)" if f.get("mean_toffoli") else ""
+    off = f.get("official") or {}
+    offt = f", official draw {off['toffoli']:,.1f}" if off.get("toffoli") else ""
+    ms = f"; mean score {f['mean_score']:,}" if f.get("mean_score") else ""
+    return (f"passed {f['passed']}/{f['draws']} fresh draws of {f['tested_shots'] // max(1, f['draws']):,} inputs; "
+            f"{f['failed_shots']} wrong results in total ({per:.1f} per draw); {tof}{offt}{ms}")
 
 
 def fast_baseline(cfg, adapter, commit: str) -> int | None:

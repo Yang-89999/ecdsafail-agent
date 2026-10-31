@@ -5,3 +5,4 @@ tools/fast_eval/Cargo.toml
 tools/fast_eval/Cargo.lock
 __pycache__/
 *.egg-info/
+tools/fast_eval/.agentlab-version

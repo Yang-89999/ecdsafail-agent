@@ -56,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-measure", action="store_true")
     p = sub.add_parser("ask"); p.add_argument("question", nargs="+")
     p = sub.add_parser("score"); p.add_argument("worktree", type=Path); p.add_argument("--shots", type=int, default=None)
+    p = sub.add_parser("fresh"); p.add_argument("exp", type=int, nargs="?"); p.add_argument("--draws", type=int, default=None)
     p = sub.add_parser("audit"); p.add_argument("exp", type=int)
     p = sub.add_parser("approve"); p.add_argument("exp", type=int); p.add_argument("--by", required=True); p.add_argument("--note", default="")
     p = sub.add_parser("submit"); p.add_argument("exp", type=int); p.add_argument("--note", default="")
@@ -101,6 +102,23 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "score":
         res = adapter.fast_score(a.worktree, a.shots or cfg.fast_shots)
         print(json.dumps(res.__dict__, indent=2, default=str))
+    elif a.cmd == "fresh":
+        # Fresh-inputs check: the public head (default) or one experiment's tree on independent input draws.
+        from .orchestrator import fresh_line, head_fresh
+        if a.draws:
+            cfg.fresh_draws = a.draws
+        if a.exp is None:
+            import subprocess as _sp
+            _sp.run(["git", "fetch", "-q", cfg.upstream_remote, cfg.upstream_branch], cwd=adapter.root, check=False)
+            best = adapter.current_best()
+            res = head_fresh(cfg, adapter, best["commit"]) if best else None
+            print(f"public head {best['commit']} (official score {best['score']:,}):" if best else "public head: unknown")
+        else:
+            exp = ledger.experiment(a.exp)
+            res = adapter.fresh_check(Path(exp["worktree"]), cfg.fresh_draws, cfg.fast_shots)
+            print(f"exp #{a.exp}:")
+        print("  " + fresh_line(res))
+        print(json.dumps(res, indent=2, default=str))
     elif a.cmd == "audit":
         from .roles.auditor import audit
         print(json.dumps(audit(cfg, adapter, ledger, a.exp), indent=2, default=str))

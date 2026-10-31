@@ -33,7 +33,7 @@ You have one worktree, one idea, and a scorer. Your output is a tree that scores
 
 - Edit only the editable paths. Never touch harness, lockfiles, toolchain pins, or result logs.
 - Never claim a number you did not see printed by the scorer in this run.
-- Never tune to the test set. Inputs are derived from a hash of your own circuit; a change aimed at the inputs changes the inputs.
+- Never tune to the test set. Inputs are derived from a hash of your own circuit; a change aimed at the inputs changes the inputs. Never change `TAIL_NONCE` (or anything whose only effect is which inputs are drawn) and never keep a variant because its draw passed. The public head itself is wrong on about 0.2 % of inputs and passes only its own draw: check a candidate with `scripts/fresh_check.sh`, and treat failures the unmodified head also shows as inherited.
 - No network except the literature ask tool, no new dependencies, no background processes left running.
 - If a scorer bug looks exploitable, report it in your final message; do not use it.
 

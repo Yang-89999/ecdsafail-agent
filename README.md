@@ -100,6 +100,7 @@ agentlab run --rounds 3 --solvers 2      # 6 executor runs on 2 parallel slots, 
 agentlab coordinator                     # the Coordinator's last decisions (options, decision, launches, retirements)
 agentlab lessons                         # what the system has learned so far (revised after every run, read by every agent)
 agentlab trend -n 30                     # leaderboard history: measured score per merged submission, what each step changed, synthesis -> work/trend.md
+agentlab fresh [exp] [--draws 8]         # the public head (or exp N) on independent input draws: real failure rate, average Toffoli
 agentlab watch [exp]                     # readable live view of a solver run (second terminal)
 agentlab ledger                          # what happened
 agentlab audit 12                        # clean-room + official benchmark for experiment 12
@@ -126,3 +127,9 @@ the exact name shown by `/model` inside `codex`. The ledger records the model fo
 - Agent-reported numbers are discarded; the orchestrator re-scores the tree it is handed.
 - `bests` holds only numbers printed by the official checker.
 - No submission without `audited` status, an approval row, and a strict improvement.
+- Fresh inputs: the official harness tests one input draw derived from a hash of the op stream, and public
+  submissions re-roll that draw through `TAIL_NONCE`. `scripts/fresh_check.sh` tests the same op stream on
+  independent draws (`fast_eval` with `EVAL_SALT`, which mixes a salt into the hash; unset, the inputs are the
+  official ones). The audit rejects a candidate that fails any fresh draw, every prompt carries the public head's
+  own fresh-draw result (so failures it already has are known as inherited), and no role may change the nonce or
+  pick a variant because its draw passed.

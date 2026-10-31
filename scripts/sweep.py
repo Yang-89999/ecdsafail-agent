@@ -98,6 +98,9 @@ def main() -> int:
         cmd = dict(variants)[name]
         sh(cmd, wt)
         print(f"[sweep] kept {name} in the tree (uncommitted): check it, then commit")
+        print(f"[sweep] before you commit, rule out luck: the best of many variants is partly the luckiest input draw.\n"
+              f"        bash {HERE}/fresh_check.sh {wt} 8 {a.shots} {a.challenge}\n"
+              f"        keep it only if it passes every draw and its mean Toffoli beats the committed tree's fresh mean.")
     print(json.dumps({"baseline": base, "best": good[0] if good else None, "n": len(rows), "failed": len(rows) - len(good)}))
     return 0
 

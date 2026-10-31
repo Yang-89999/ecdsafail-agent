@@ -130,6 +130,17 @@ def experiment_summary(cfg: Config, ledger: Ledger, exp_id: int, variants: int =
     return out
 
 
+FRESH_NOTE = ("The official harness tests ONE input draw derived from the circuit's hash, and the public submissions re-roll "
+              "that draw with TAIL_NONCE. Any edit redraws the inputs, so failures on the new draw that the unmodified head "
+              "also shows on fresh draws are inherited, not caused by the edit. Do not launch runs whose goal is to explain "
+              "or repair them unless the plan is a correct circuit that still beats the bar; never launch nonce searches.")
+
+
+def _fresh(best) -> str:
+    from ..orchestrator import fresh_line
+    return fresh_line((best or {}).get("fresh"))
+
+
 def _context(cfg, adapter, ledger, running: list[dict], finished: list[int], free_slots: int, best) -> str:
     from .strategist import problem_path
     pj = problem_path(cfg).with_suffix(".json")
@@ -173,7 +184,9 @@ def _context(cfg, adapter, ledger, running: list[dict], finished: list[int], fre
 LESSONS SO FAR (work/lessons.md, revised after every run; what the system has learned):
 {lessons}
 
-PUBLIC BAR: {dict(best) if best else '?'}   (gain = (fast_score of the head - fast score of a run) / fast_score of the head, same shots: an unchanged circuit gains exactly 0, any nonzero gain is a real circuit change)
+PUBLIC BAR: {({k: v for k, v in dict(best).items() if k != 'fresh'}) if best else '?'}   (gain = (fast_score of the head - fast score of a run) / fast_score of the head, same shots: an unchanged circuit gains exactly 0, any nonzero gain is a real circuit change)
+PUBLIC HEAD ON FRESH INPUTS: {_fresh(best)}
+{FRESH_NOTE}
 
 PROBLEM STATEMENT (Strategist):
 {problem or '(none yet)'}

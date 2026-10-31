@@ -32,6 +32,25 @@ K executor slots run in parallel and independently. The loop wakes up whenever a
 
 `--hours H` is a launch window, not a kill switch: after H hours nothing new starts and the loop waits for the running runs, then writes the unit summary (`work/units/`). `--rounds N` = N×K launches. `work/status.md` (rewritten every minute) shows the running runs with elapsed time, scored variants, best so far and last activity, the Coordinator's latest decision, and anything waiting for approval.
 
+## Fresh inputs (2026-10-31)
+
+The official harness tests one draw of 9024 inputs, derived from a SHAKE256 hash of the op stream. Since mid-October
+every merged submission has changed `TAIL_NONCE`, a value written into 96 X ops at the end of the stream whose only
+effect is to re-roll that hash; the leading code ships a test that counts failing shots per nonce. A circuit that is
+wrong on a small share of inputs can therefore pass the official draw, and every honest edit, which re-rolls the
+draw, exposes those latent failures. `scripts/fresh_check.sh` builds once and evaluates the same op stream on N
+independent draws (`EVAL_SALT` mixed into the hash; unset = the official inputs). Uses: the head's own fresh-draw
+result is cached per commit (`work/head_fresh.json`) and quoted in every Coordinator and executor prompt, so
+inherited failures are recognised as such; the Auditor rejects any candidate that fails a fresh draw; no role may
+change the nonce or keep a variant because its draw passed.
+
+Measured 2026-10-31 on head 5ba2d2d (912,518,320): the official draw passes (0 wrong); 8 fresh draws all fail, 147 wrong
+results in 72,192 inputs (0.20 %, 10 to 23 per draw) and phase garbage in 99 of 1,128 batches; average Toffoli
+739,480 with sd 3.7 between draws, so the Toffoli count is not luck, only correctness is. Control without any salt
+(the official hash stream extended to 18,048 inputs): 15 wrong results, 11 phase-garbage batches. The practice is
+documented in the code since 39134ec (2026-06-04: "nonce=296434 lands a clean island: validated 0/0/0 over all 9024
+shots") together with truncated iteration counts (ACTIVE_ITERATIONS).
+
 ## Timing on this host (4 vCPU, 2026-10-29)
 
 - cargo build of build_circuit: ~2 min cold, seconds warm

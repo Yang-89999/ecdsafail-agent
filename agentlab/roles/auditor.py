@@ -5,7 +5,10 @@
      (catches a stale base, which is how late submissions lose)
   3. determinism: build_circuit twice, ops.bin hashes must match
   4. full official benchmark.sh run (9024 shots)
-  5. compare with the best verified score; record the verdict
+  5. fresh inputs: the same op stream on cfg.fresh_draws independent input draws must pass every one
+     (the official draw is one hash-derived sample; a circuit that is wrong on a small share of inputs, or a
+     variant chosen because its draw was lucky, passes it and fails here)
+  6. compare with the best verified score; record the verdict
 """
 
 from __future__ import annotations
@@ -83,6 +86,15 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
                        "duration_s": res.duration_s}
     if not res.ok:
         verdict["fail"] = f"official benchmark rejected: {res.reason}"
+        ledger.finish_experiment(exp_id, "rejected", details=verdict)
+        return verdict
+
+    fresh = adapter.fresh_check(clean, cfg.fresh_draws, 9024)
+    verdict["fresh"] = fresh
+    verdict["checks"]["fresh_inputs_ok"] = bool(fresh.get("ok"))
+    if not fresh.get("ok"):
+        verdict["fail"] = (f"fails on fresh inputs: passed {fresh.get('passed')}/{fresh.get('draws')} independent draws, "
+                           f"{fresh.get('failed_shots')} wrong results ({fresh.get('reason', '')})")
         ledger.finish_experiment(exp_id, "rejected", details=verdict)
         return verdict
 

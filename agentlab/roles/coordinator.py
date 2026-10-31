@@ -151,7 +151,8 @@ def _context(cfg, adapter, ledger, running: list[dict], finished: list[int], fre
         run_rows.append({"exp": r["exp_id"], "idea": r.get("idea_id"), "title": idea.title if idea else None,
                          "sub": getattr(idea, "subproblem", None) if idea else None, "mode": r["mode"], "parents": r["parents"],
                          "elapsed_min": int((time.time() - r["t0"]) // 60), **prog,
-                         "best_gain_so_far": round((best["score"] - prog["best_score"]) / best["score"], 6)
+                         "best_gain_so_far": round(((best.get("fast_score") or best["score"]) - prog["best_score"])
+                                                   / (best.get("fast_score") or best["score"]), 6)
                          if best and prog["best_score"] else None})
     fin = [experiment_summary(cfg, ledger, x) for x in finished]
     recent = [experiment_summary(cfg, ledger, e["id"], variants=3) for e in ledger.experiments(8) if e["id"] not in finished
@@ -170,7 +171,7 @@ def _context(cfg, adapter, ledger, running: list[dict], finished: list[int], fre
 LESSONS SO FAR (work/lessons.md, revised after every run; what the system has learned):
 {lessons}
 
-PUBLIC BAR: {dict(best) if best else '?'}   (gain = (bar - score) / bar; fast-score noise about 0.02 %)
+PUBLIC BAR: {dict(best) if best else '?'}   (gain = (fast_score of the head - fast score of a run) / fast_score of the head, same shots: an unchanged circuit gains exactly 0, any nonzero gain is a real circuit change)
 
 PROBLEM STATEMENT (Strategist):
 {problem or '(none yet)'}

@@ -173,7 +173,8 @@ def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id
     res = adapter.fast_score(wt, cfg.fast_shots)
     gain = None
     if res.ok and best:
-        gain = (best["score"] - res.score) / best["score"]
+        ref = best.get("fast_score") or best["score"]  # same shots as res: an unchanged tree gains exactly 0
+        gain = (ref - res.score) / ref
     status = "scored" if res.ok else "failed"
     ledger.finish_experiment(
         exp_id, status, head_commit=head, shots=res.shots, toffoli=res.metrics.get("toffoli"),

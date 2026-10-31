@@ -85,7 +85,8 @@ def _running_rows(cfg: Config, ledger: Ledger, running: dict, best) -> list[str]
         if prog["best_score"]:
             bestcol = f"{prog['best_score']:,}"
             if best:
-                bestcol += f" ({(best['score'] - prog['best_score']) / best['score'] * 100:+.3f} %)"
+                ref = best.get("fast_score") or best["score"]
+                bestcol += f" ({(ref - prog['best_score']) / ref * 100:+.3f} %)"
         last = f"{prog['idle_min']} min ago" if prog["idle_min"] is not None else "-"
         mode = r["mode"] + (f" {r['parents']}" if r["parents"] else "")
         rows.append(f"| #{r['exp_id']} | {('#' + str(r['idea_id']) + ' ' + idea.title[:40]) if idea else '-'} | {mode} | "
@@ -194,7 +195,30 @@ def _refresh_best(cfg, adapter, ledger):
     best = adapter.current_best()
     if best:
         ledger.record_best(best["score"], best["toffoli"], best["qubits"], f"upstream:{best['commit']}", verified=True)
+        best = dict(best, fast_score=fast_baseline(cfg, adapter, best["commit"]))
     return best
+
+
+def fast_baseline(cfg, adapter, commit: str) -> int | None:
+    """Fast score (cfg.fast_shots) of the upstream head itself, cached per commit. Gains are measured against
+    this, not against the official 9024-shot score: the two differ by shot sampling alone (+/-0.002 %), which
+    made every unchanged tree look like a small gain or loss."""
+    cache = Path(cfg.runs_dir).parent / "fast_baseline.json"
+    data = json.loads(cache.read_text()) if cache.exists() else {}
+    key = f"{commit}@{cfg.fast_shots}"
+    if key in data:
+        return data[key]
+    wt = Path(cfg.worktrees_dir) / "baseline"
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=adapter.root, capture_output=True)
+    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(wt), commit], cwd=adapter.root, check=True)
+    res = adapter.fast_score(wt, cfg.fast_shots)
+    if not res.ok:
+        print(f"  [baseline] fast score of upstream {commit} failed: {res.reason}", flush=True)
+        return None
+    data[key] = res.score
+    cache.write_text(json.dumps(data, indent=1))
+    print(f"  [baseline] upstream {commit}: fast score {res.score:,} ({cfg.fast_shots} shots); gains are measured against it", flush=True)
+    return res.score
 
 
 def _decide_and_launch(cfg, adapter, ledger, rng, pool, running, finished_since, free, base_ref, best, state) -> None:

@@ -101,6 +101,11 @@ def write_status(cfg: Config, ledger: Ledger, state: dict, running: dict | None 
     if state.get("deadline"):
         left = state["deadline"] - time.time()
         window = f"   launch window remaining: {_fmt(left)}" if left > 0 else "   launch window closed: waiting for the running runs"
+    elif state.get("checkpoint_hours"):
+        nxt = state["last_ckpt"] + state["checkpoint_hours"] * 3600 - time.time()
+        window = f"   continuous; next unit summary in {_fmt(max(0, nxt))}"
+    if state.get("stop"):
+        window += f"   STOPPING (Coordinator: {state['stop'][:200]})"
     lines = [f"# agentlab status  ({time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())})", "",
              f"launched: {state['launched']}   finished: {state['finished']}   elapsed: {_fmt(time.time() - state['t0'])}{window}",
              f"backend failures in a row: {state['fails']}", ""]
@@ -121,7 +126,11 @@ def write_status(cfg: Config, ledger: Ledger, state: dict, running: dict | None 
 
 
 def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_threshold: float = 0.0,
-               hours: float | None = None) -> None:
+               hours: float | None = None, checkpoint_hours: float | None = None) -> None:
+    """rounds/hours bound the launches (then running runs finish); with neither, the loop is continuous:
+    every slot is refilled the moment it frees up, a unit summary is written every `checkpoint_hours`
+    without stopping anything, and the loop ends only when stopped or when the Coordinator declares the
+    campaign hopeless with nothing running."""
     adapter = load_adapter(cfg)
     adapter.ensure_ready()
     ledger = Ledger(cfg.ledger_path)
@@ -138,12 +147,17 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
     max_launches = rounds * solvers if rounds else 0
     base_ref = f"{cfg.upstream_remote}/{cfg.upstream_branch}"
     state = {"t0": time.time(), "deadline": time.time() + hours * 3600 if hours else None, "launched": 0, "finished": 0,
-             "fails": 0, "pause_until": 0.0, "last_lit": time.time(), "last_decision": 0.0, "empty_decisions": 0}
+             "fails": 0, "pause_until": 0.0, "last_lit": time.time(), "last_decision": 0.0, "empty_decisions": 0,
+             "last_ckpt": time.time(), "checkpoint_hours": checkpoint_hours, "stop": None}
     _maybe_trend(cfg, adapter, ledger)
     _maybe_strategize(cfg, adapter, ledger, state, force=True)
     if hours:
         print(f"launching runs for {_fmt(hours * 3600)} (until {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(state['deadline']))}) "
               f"on {solvers} slot(s); running runs finish after that; status in {Path(cfg.runs_dir).parent / 'status.md'}", flush=True)
+    elif not rounds:
+        print(f"continuous run on {solvers} slot(s): every free slot is refilled at once"
+              + (f"; unit summary every {checkpoint_hours:g} h" if checkpoint_hours else "")
+              + f"; stop with docker/stop.sh; status in {Path(cfg.runs_dir).parent / 'status.md'}", flush=True)
     pool = ThreadPoolExecutor(max_workers=solvers)
     running: dict[Future, dict] = {}
     finished_since: list[int] = []  # results the Coordinator has not seen yet
@@ -151,7 +165,11 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
     try:
         while True:
             now = time.time()
-            window_open = (not max_launches or state["launched"] < max_launches) and (not state["deadline"] or now < state["deadline"])
+            window_open = ((not max_launches or state["launched"] < max_launches) and (not state["deadline"] or now < state["deadline"])
+                           and not state["stop"])
+            if state["checkpoint_hours"] and now - state["last_ckpt"] >= state["checkpoint_hours"] * 3600:
+                _close_unit(cfg, ledger, state, running, best)  # checkpoint only: nothing stops
+                state["last_ckpt"] = now
             free = solvers - len(running)
             if free > 0 and window_open and now >= state["pause_until"]:
                 # decide when something came back, when the slots are all idle, or every 15 min anyway
@@ -185,7 +203,9 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
         pool.shutdown(wait=False, cancel_futures=True)
         raise
     pool.shutdown(wait=True)
-    if hours:
+    if state["stop"]:
+        print(f"\n===== the Coordinator ended the campaign: {state['stop']} =====", flush=True)
+    if hours or checkpoint_hours or state["stop"]:
         _close_unit(cfg, ledger, state)
     print(ledger.summary_text())
 
@@ -231,6 +251,12 @@ def _decide_and_launch(cfg, adapter, ledger, rng, pool, running, finished_since,
     if d.get("decision"):
         print(f"  [coordinator] {d['decision'][:600]}", flush=True)
     launches = d.get("launches") or []
+    if d.get("hopeless") and not launches:
+        reason = d.get("hopeless_reason") or "no reason given"
+        if running:
+            print(f"  [coordinator] judges the campaign hopeless ({reason}); letting the running runs finish", flush=True)
+        state["stop"] = reason
+        return
     if not launches:
         state["empty_decisions"] += 1
         if not running and state["empty_decisions"] >= 2:
@@ -299,9 +325,9 @@ def _on_finished(cfg, adapter, ledger, fut: Future, r: dict, audit_threshold, st
             ledger.set_idea_status(i.id, "exhausted")
 
 
-def _close_unit(cfg: Config, ledger: Ledger, state: dict) -> None:
-    """End of a unit: keep its summary under work/units/ and print it to the log."""
-    write_status(cfg, ledger, state)
+def _close_unit(cfg: Config, ledger: Ledger, state: dict, running: dict | None = None, best=None) -> None:
+    """End of a unit (or a checkpoint in a continuous run): keep its summary under work/units/ and print it."""
+    write_status(cfg, ledger, state, running, best)
     units = Path(cfg.runs_dir).parent / "units"
     units.mkdir(parents=True, exist_ok=True)
     n = len(list(units.glob("unit-*.md"))) + 1

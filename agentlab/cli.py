@@ -5,6 +5,7 @@
   agentlab scout [-n 15]              merged submissions -> ideas
   agentlab ideas [add "title" "why"]  list / add ideas
   agentlab run --rounds N --solvers K  N x K executor runs on K parallel slots (or --hours 5 / --days 7: launch for that long, let runs finish)
+  agentlab run --continuous           keep every slot busy until stopped or the Coordinator declares no hope; unit summary every 5 h
   agentlab strategy                   Strategist: formulate, decompose with ceilings, allocate -> work/problem.md
   agentlab brainstorm                 new candidate ideas from the profile and past reports
   agentlab ask "question"             on-demand literature answer for a designer (cited, cached)
@@ -46,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("run"); p.add_argument("--rounds", type=int, default=1); p.add_argument("--solvers", type=int, default=None)
     p.add_argument("--audit-threshold", type=float, default=None, help="min fast-score relative gain to trigger an audit (default from config)")
     p.add_argument("--hours", type=float, default=None); p.add_argument("--days", type=float, default=None)
+    p.add_argument("--continuous", action="store_true", help="keep every slot busy until stopped; a unit summary every --checkpoint hours")
+    p.add_argument("--checkpoint", type=float, default=5.0)
     sub.add_parser("brainstorm"); sub.add_parser("status"); sub.add_parser("strategy")
     p = sub.add_parser("coordinator"); p.add_argument("-n", type=int, default=5)
     sub.add_parser("lessons"); p = sub.add_parser("learn"); p.add_argument("exps", type=int, nargs="+")
@@ -91,9 +94,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{i.id}] {i.status:9s} prior={i.prior:.3f} tries={i.tries} best={i.best_gain*100:+.3f}%  {i.title}{extra}")
     elif a.cmd == "run":
         from .orchestrator import run_rounds
-        hours = (a.days * 24 if a.days else None) or a.hours
-        rounds = 0 if hours and a.rounds == 1 else a.rounds   # a time limit alone means "as many rounds as fit"
-        run_rounds(cfg, rounds, a.solvers, cfg.audit_threshold if a.audit_threshold is None else a.audit_threshold, hours=hours)
+        hours = None if a.continuous else ((a.days * 24 if a.days else None) or a.hours)
+        rounds = 0 if (a.continuous or hours) and a.rounds == 1 else a.rounds   # a time limit alone means "as many rounds as fit"
+        run_rounds(cfg, rounds, a.solvers, cfg.audit_threshold if a.audit_threshold is None else a.audit_threshold, hours=hours,
+                   checkpoint_hours=a.checkpoint if a.continuous else None)
     elif a.cmd == "score":
         res = adapter.fast_score(a.worktree, a.shots or cfg.fast_shots)
         print(json.dumps(res.__dict__, indent=2, default=str))

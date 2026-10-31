@@ -61,8 +61,10 @@ SCHEMA = {
             },
         },
         "questions": {"type": "array", "items": {"type": "string"}},
+        "hopeless": {"type": "boolean"},
+        "hopeless_reason": {"type": "string"},
     },
-    "required": ["situation", "options", "decision", "launches", "retire", "questions"],
+    "required": ["situation", "options", "decision", "launches", "retire", "questions", "hopeless", "hopeless_reason"],
     "additionalProperties": False,
 }
 
@@ -246,7 +248,8 @@ and why, as a note the human will read. At most {free_slots} launches; a launch 
 backlog, not one already running), "continue" (parent_exps = [one finished experiment]) or "combine" (parent_exps =
 two or more finished experiments whose branches should be cherry-picked together). "instruction" is what the executor
 does first and what would refute the direction; "why" is for the human. Retire ideas only with a reason. Up to two
-questions for the literature. Return JSON matching the schema."""
+questions for the literature. Set "hopeless" true (with "hopeless_reason") only when you launch nothing because the
+evidence closes every open direction; it ends the campaign. Return JSON matching the schema."""
         try:
             data = json.loads(make_backend(cfg).complete(prompt, schema=SCHEMA, timeout_s=1500))
         except Exception as e:  # noqa: BLE001
@@ -316,6 +319,8 @@ def _append_log(cfg, ledger, data: dict, running, finished, free_slots) -> None:
         lines.append("- launches: none (waiting)")
     for q in data.get("questions") or []:
         lines.append(f"- asked the literature: {q}")
+    if data.get("hopeless"):
+        lines.append(f"- **declared the campaign hopeless**: {data.get('hopeless_reason', '')}")
     with p.open("a") as f:
         f.write("\n".join(lines) + "\n\n")
 

@@ -13,6 +13,7 @@ You are the main agent. The Strategist wrote the problem statement (formulation,
 - **continue**: a run came back with something interesting (a gain, a partial gain, an `needs_more_time`, a measurement that changes a ceiling, a promising variant it did not finish) and its tree is worth more work. The continuation starts from that run's final tree with its notes and variants; tell it what to do next, not what it already did.
 - **combine**: two or more finished runs each hold a change that pays on its own and touch different parts of the circuit. The executor cherry-picks their branches onto the upstream head, scores each alone and the combination, and keeps the combination only if it beats the best single branch.
 - **retire**: an idea whose evidence says the ceiling is reached, the change is already in the code, or the approach contradicts a measurement. Give the reason.
+- **hopeless**: end the campaign. Only when the evidence (lessons, measured ceilings, the trend) closes every open sub-problem and the backlog holds nothing with a plausible measured path; say exactly why, so the human can decide on another target. Time spent is never a reason.
 - **wait**: launching nothing is a decision too, when a running run will settle the question the next launch depends on, or when nothing open is worth a slot. Say what you are waiting for.
 
 ## Principles

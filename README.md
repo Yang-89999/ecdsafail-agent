@@ -47,14 +47,17 @@ Edits to this repo on the Mac are visible inside the container immediately.
 ### Units of work (5 h each) or a week unattended
 
 ```bash
-docker/start.sh                 # one unit = agentlab run --hours 5 --solvers 2, detached; run again for the next unit
-docker/start.sh --days 7        # or one long run
+docker/start.sh                 # continuous: 2 slots always busy, unit summary every 5 h, until docker/stop.sh
+docker/start.sh --hours 5 --solvers 2   # or one bounded unit (launch for 5 h, then let running runs finish)
 docker/logs.sh                  # follow the log
 docker/shell.sh                 # shell inside: agentlab status | agentlab coordinator | agentlab watch <exp> | agentlab approve <exp> --by Yang
 docker/stop.sh
 ```
 
-A unit starts with the Strategist (formulation, decomposition into sub-problems with measured ceilings,
+A continuous run never leaves a slot idle: the moment a run finishes the Coordinator refills its slot; every
+5 hours it writes a unit summary to `work/units/` without stopping anything, and it ends only with
+`docker/stop.sh` or when the Coordinator declares the whole campaign hopeless with a reason. A bounded unit
+(`--hours 5`) starts with the Strategist (formulation, decomposition into sub-problems with measured ceilings,
 priors from predicted gains), revised after every six finished runs. Then the Coordinator fills the two
 executor slots and refills each one as soon as it frees up, feeding every result back into its next
 decision (`work/coordinator.md`). The 5 hours are a launch window: after it nothing new starts, but a run

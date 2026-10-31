@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,6 +77,50 @@ CREATE TABLE IF NOT EXISTS approvals (
 """
 
 
+class _Result:
+    """A fully fetched query result, so no cursor is shared between threads."""
+
+    def __init__(self, cur: sqlite3.Cursor):
+        self.rows = cur.fetchall() if cur.description else []
+        self.rowcount = cur.rowcount
+        self.lastrowid = cur.lastrowid
+
+    def fetchall(self) -> list:
+        return self.rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class _LockedDB:
+    """One sqlite connection shared by the loop, the parallel solver threads and the background trend
+    thread. Every call is serialised; without this two threads committing at once raised
+    "cannot commit - no transaction is active"."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._c = conn
+        self._lock = threading.RLock()
+
+    def execute(self, sql: str, params: Any = ()) -> _Result:
+        with self._lock:
+            return _Result(self._c.execute(sql, params))
+
+    def executemany(self, sql: str, seq) -> _Result:
+        with self._lock:
+            return _Result(self._c.executemany(sql, seq))
+
+    def executescript(self, script: str) -> None:
+        with self._lock:
+            self._c.executescript(script)
+
+    def commit(self) -> None:
+        with self._lock:
+            self._c.commit()
+
+
 @dataclass
 class Idea:
     id: int
@@ -96,8 +141,9 @@ class Ledger:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path, timeout=60, check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
+        conn = sqlite3.connect(self.path, timeout=60, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        self.db = _LockedDB(conn)
         self.db.executescript(SCHEMA)
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(ideas)")}
         if "review" not in cols:

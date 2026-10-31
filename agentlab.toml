@@ -10,8 +10,8 @@ model = "gpt-6-astra"   # as shown by /model inside codex; empty = Codex default
 reasoning_effort = "high"
 
 solvers = 2             # parallel executor slots (the Coordinator fills each free slot)
-fast_shots = 1024       # the official run uses 9024; 64 shots showed 0.016 % noise against it
-audit_threshold = 0.0005  # fast-score gain needed before the full official run
+fast_shots = 9024       # same shots as the official run: eval adds ~15 s, and the fast score is then the official number
+audit_threshold = 0.0     # any strict gain at 9024 shots goes to the audit (leaderboard steps are ~0.01 %)
 solver_timeout_s = 28800  # 8 h safety cap per run; runs end on evidence (gain or no hope), not on the clock
 explore_c = 0.6
 

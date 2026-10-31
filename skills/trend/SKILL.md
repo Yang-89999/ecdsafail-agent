@@ -14,7 +14,7 @@ Classify what changed and why it paid, from the diff and the notes the submitter
 ## Synthesis
 
 - **Where the gains came from**: by stage and by period (early, middle, recent), with the measured sizes. Which stages carried the last ten steps, which have gone quiet.
-- **How the steps are shrinking**: the size distribution of recent gains versus earlier ones, and what the next step must look like to be visible above fast-score noise (about 0.02 %).
+- **How the steps are shrinking**: the size distribution of recent gains versus earlier ones, and how large a step has to be to count (any strict official-score gain is merged; recent steps are about 0.01 %).
 - **What the others do**: recurring techniques and tools visible in the diffs (search procedures, exact synthesis, policy tables, snapshot regeneration) that our executors do not use, and the opposite.
 - **Framework-level directions**: at least two directions that replace a whole stage's design rather than tuning the head's code, each with the stage, the evidence from the history that it is untried or abandoned early, a predicted size (labelled a prediction) and a first experiment.
 - **Strategic implications**: three to five sentences a Strategist can act on: what to stop, what to continue, what to try that the history says nobody has.

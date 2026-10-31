@@ -29,8 +29,8 @@ class Config:
     reasoning_effort: str = "high"
     # Search
     solvers: int = 2  # parallel executor slots
-    fast_shots: int = 1024  # shots for the cheap score (16 simulator batches, ~1 min; 64 shots showed 0.016 % noise)
-    audit_threshold: float = 0.0005  # min fast-score relative gain before the full official run
+    fast_shots: int = 9024  # the official shot count: eval takes seconds, the build dominates, so the cheap score is the official number
+    audit_threshold: float = 0.0  # any strict gain goes to the audit; recent leaderboard steps are ~0.01 %
     solver_timeout_s: int = 8 * 3600  # safety cap only: a run ends when its executor finds a gain or no hope
     explore_c: float = 0.6  # UCB exploration constant on relative gain
     # Submission policy

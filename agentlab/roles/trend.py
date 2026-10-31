@@ -117,7 +117,7 @@ def measure(cfg: Config, adapter: CompetitionAdapter, commits: list[str], cache:
 
 def render(rows: list[dict], synth: dict | None) -> str:
     lines = [f"# Leaderboard trend  ({time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}; {len(rows)} merged submissions, oldest first; "
-             "scores are our fast score, 1024 shots)", "",
+             "scores are our fast score at the configured shots, 9024 = official)", "",
              "| commit | date | rank from top | score | Δ product | Δ Toffoli | Δ qubits | stage | mechanism | novelty |",
              "|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
@@ -144,7 +144,7 @@ def analyse(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, n: int = 3
     if not rows:
         print("[trend] no merged submissions found", flush=True)
         return []
-    cache = Path(cfg.runs_dir).parent / "trend" / "scores.json"
+    cache = Path(cfg.runs_dir).parent / "trend" / f"scores-{cfg.fast_shots}.json"
     scores = measure(cfg, adapter, [r["commit"] for r in rows], cache) if do_measure else (
         json.loads(cache.read_text()) if cache.exists() else {})
     prev = None

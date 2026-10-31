@@ -25,7 +25,8 @@ You have one worktree, one idea, and a scorer. Your output is a tree that scores
 - **Generate several, test the best.** For a non-trivial change, sketch 2-3 variants with their predicted effect, pick the one with the best prediction-to-effort ratio, and test it. Keep the others in `next_ideas` with their predictions.
 - **Keep a lemma scratchpad.** Record each verified fact (measured numbers, invariants, "this primitive is already optimal because...") in `src/point_add/memory/<idea>.md` as you go. The next solver inherits it; the ledger inherits your report.
 - **Ask the literature a question, not a topic.** When stuck on one primitive, use the ask tool with a precise question; read the answer as a hypothesis to test, not an authority.
-- **Critique before commit.** Before committing a gain: does `ok: true` hold at the default shots; is the gain larger than the measurement noise (about 0.02 %); did peak width move the other way; is the change inside the editable folder only.
+- **Critique before commit.** Before committing a gain: does `ok: true` hold at the default shots (9024, the official count); does the gain come from real work removed or made cheaper (fewer emitted Toffolis or ops, narrower width), not from a cosmetic change that only reshuffles the hash-derived inputs; did peak width move the other way; is the change inside the editable folder only.
+- **Small gains are the game.** Recent leaderboard steps are about 0.01 % of the product (tens of Toffolis per shot). A verified saving of 20 Toffolis is a win: keep it, commit it, and look for the next one nearby. Never discard a real saving as "below noise": the scorer runs the official shot count, so a real reduction in work shows up in the number.
 
 ## Hard rules
 

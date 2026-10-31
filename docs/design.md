@@ -17,7 +17,7 @@ Full design note (with the competition analysis): the Claude Doc "Signature-comp
 | Idea Reviewer | `roles/idea_reviewer.py`: scores candidates on relevance, novelty (vs the code, the backlog, the profile), feasibility, expected gain → `open` with a prior, or `rejected` with the reason kept in `ideas.review` | runs before each round when candidates exist |
 | Bandit | `roles/planner.py`: UCB over `ideas` (untried first by prior, gain-scaled exploration, spread across sub-problems) | a hint to the Coordinator and its fallback |
 | Solver (executor) | `roles/solver.py`: one brief, one worktree, one `codex exec` / API run, then independent re-score; modes `new` (worktree at the upstream head), `continue` (worktree from branch `agentlab/exp<parent>`, parent's base commit kept so the audit's cherry-pick range covers both runs), `combine` (upstream head, the brief lists the branches to cherry-pick); every `fast_score.sh` call appends to `<worktree>/.agentlab/scores.jsonl` | numbers discarded; no clock, stops on a verified gain or no hope (8 h safety cap) |
-| Fast scorer | `scripts/fast_score.sh` + `tools/fast_eval` (64 shots) | ranking only |
+| Fast scorer | `scripts/fast_score.sh` + `tools/fast_eval` (9024 shots, the official count; the build dominates, eval is seconds) | gains measured against the head's own fast score; any strict gain is audited |
 | Full verifier | `benchmark.sh` in the worktree (9024 shots) | the claim |
 | Auditor | `roles/auditor.py`: protected diff, clean room on upstream head, determinism, full verify, compare | gate to submit |
 | Human | `agentlab approve` row in the ledger | required |

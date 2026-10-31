@@ -131,9 +131,11 @@ def experiment_summary(cfg: Config, ledger: Ledger, exp_id: int, variants: int =
 
 
 FRESH_NOTE = ("The official harness tests ONE input draw derived from the circuit's hash, and the public submissions re-roll "
-              "that draw with TAIL_NONCE. Any edit redraws the inputs, so failures on the new draw that the unmodified head "
-              "also shows on fresh draws are inherited, not caused by the edit. Do not launch runs whose goal is to explain "
-              "or repair them unless the plan is a correct circuit that still beats the bar; never launch nonce searches.")
+              "that draw with TAIL_NONCE (the organisers' paper calls these 'clean validation islands'). Our standard is the "
+              "published reference circuits' error rate, at most 1e-4 on independent inputs (fresh_check). Any edit redraws the "
+              "inputs, so failures the unmodified head also shows on fresh draws are inherited, not caused by the edit. Do not "
+              "launch runs whose goal is to explain them unless the plan brings the error rate within the standard; never "
+              "launch nonce searches.")
 
 
 def _fresh(best) -> str:

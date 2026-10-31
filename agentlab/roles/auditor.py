@@ -5,9 +5,9 @@
      (catches a stale base, which is how late submissions lose)
   3. determinism: build_circuit twice, ops.bin hashes must match
   4. full official benchmark.sh run (9024 shots)
-  5. fresh inputs: the same op stream on cfg.fresh_draws independent input draws must pass every one
-     (the official draw is one hash-derived sample; a circuit that is wrong on a small share of inputs, or a
-     variant chosen because its draw was lucky, passes it and fails here)
+  5. fresh inputs: the same op stream on cfg.fresh_draws independent input draws; the error rate must be at most
+     cfg.max_error_rate (2^-13.3, the published reference circuits' level). The official draw is one hash-derived
+     sample that can be re-rolled, so it says little about the error rate on its own.
   6. compare with the best verified score; record the verdict
 """
 
@@ -93,8 +93,8 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
     verdict["fresh"] = fresh
     verdict["checks"]["fresh_inputs_ok"] = bool(fresh.get("ok"))
     if not fresh.get("ok"):
-        verdict["fail"] = (f"fails on fresh inputs: passed {fresh.get('passed')}/{fresh.get('draws')} independent draws, "
-                           f"{fresh.get('failed_shots')} wrong results ({fresh.get('reason', '')})")
+        verdict["fail"] = (f"error rate on independent inputs {fresh.get('error_rate')} exceeds {cfg.max_error_rate:g} "
+                           f"({fresh.get('failing_shots')} failing of {fresh.get('tested_shots')}; {fresh.get('reason', '')})")
         ledger.finish_experiment(exp_id, "rejected", details=verdict)
         return verdict
 

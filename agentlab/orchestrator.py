@@ -257,7 +257,11 @@ def fresh_line(f: dict | None) -> str:
     off = f.get("official") or {}
     offt = f", official draw {off['toffoli']:,.1f}" if off.get("toffoli") else ""
     ms = f"; mean score {f['mean_score']:,}" if f.get("mean_score") else ""
-    return (f"passed {f['passed']}/{f['draws']} fresh draws of {f['tested_shots'] // max(1, f['draws']):,} inputs; "
+    er = ""
+    if f.get("error_rate") is not None:
+        er = (f"error rate {f['error_rate']:.2e} (95 % bound {f['error_rate_ucb95']:.2e}; standard {f.get('max_error_rate', 1e-4):g}: "
+              f"{'meets it' if f.get('ok') else 'FAILS it'}); ")
+    return (f"{er}passed {f['passed']}/{f['draws']} fresh draws of {f['tested_shots'] // max(1, f['draws']):,} inputs; "
             f"{f['failed_shots']} wrong results in total ({per:.1f} per draw); {tof}{offt}{ms}")
 
 

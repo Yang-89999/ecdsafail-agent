@@ -74,10 +74,12 @@ leaves the best winner applied for you to check and commit. Then sweep around th
 FRESH INPUTS (the honesty check; run it on your final candidate and on any variant you are about to keep):
     bash {scripts}/fresh_check.sh {wt} {cfg.fresh_draws} {fast_shots} {adapter.root}
 The official scorer tests ONE input draw, derived from a hash of the op stream; any edit redraws it. fresh_check tests
-the same circuit on {cfg.fresh_draws} independent draws and prints failures per draw and the average Toffoli across draws.
+the same circuit on {cfg.fresh_draws} independent draws and prints the error rate and the average Toffoli across draws.
+Our correctness standard is the one of the published reference circuits (Babbush et al. 2026, Schrottenloher 2026):
+an error rate of at most {cfg.max_error_rate:g} on independent inputs. Approximations are allowed within that budget.
 The unmodified public head on fresh inputs: {head_fresh}
 So: (1) a failure on the new draw that the unmodified head also shows on fresh draws is INHERITED; do not spend the run
-explaining or repairing it unless your plan is a correct circuit that still beats the bar. (2) A variant that wins on
+explaining or repairing it unless your plan brings the error rate within the standard. (2) A variant that wins on
 the official draw but not on the fresh-draw average won by luck: it is not a gain. (3) Never change TAIL_NONCE or any
 value whose only effect is which inputs get drawn, and never pick a variant because its draw passed.
 

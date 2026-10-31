@@ -7,9 +7,12 @@
 #
 #   scripts/fresh_check.sh <worktree> [draws=8] [shots=9024] [challenge checkout]
 #
-# Prints one line per draw; the last line is JSON:
-#   {"ok": <every draw passed>, "draws": N, "passed": n, "failed_shots": total wrong shots over all draws,
-#    "tested_shots": N*shots, "mean_toffoli": ..., "sd_toffoli": ..., "qubits": ..., "mean_score": ...,
+# "Correct" here means the standard of the published reference circuits (Babbush et al. 2026, Schrottenloher
+# 2026, both approximate): an error rate of at most 2^-13.3 (about 1e-4) on independent inputs. MAX_ERROR_RATE
+# overrides it. Prints one line per draw; the last line is JSON:
+#   {"ok": <error_rate <= max>, "error_rate": failing/tested, "error_rate_ucb95": ..., "failing_shots": wrong or
+#    phase-flagged shots over all fresh draws, "failed_shots": wrong results only, "draws": N, "passed": draws with
+#    no failure, "tested_shots": N*shots, "mean_toffoli": ..., "sd_toffoli": ..., "qubits": ..., "mean_score": ...,
 #    "official": {"ok": ..., "toffoli": ..., "score": ...}}
 # The same JSON is appended to <worktree>/.agentlab/fresh.jsonl.
 set -euo pipefail
@@ -22,7 +25,7 @@ here="$(cd "$(dirname "$0")/.." && pwd -P)"
 challenge="${4:-$(dirname "$wt")/../ecdsafail-challenge}"
 fast_eval="$here/tools/fast_eval/target/release/fast_eval"
 stamp="$here/tools/fast_eval/.agentlab-version"
-if [[ ! -x "$fast_eval" || "$(cat "$stamp" 2>/dev/null)" != "3" ]]; then
+if [[ ! -x "$fast_eval" || "$(cat "$stamp" 2>/dev/null)" != "4" ]]; then
   bash "$here/scripts/build_fast_eval.sh" "$challenge" >&2
 fi
 
@@ -72,8 +75,8 @@ for salt in official $(seq 1 "$draws"); do
   fi
 done
 
-out="$(python3 - "$scratch/draws.jsonl" <<'PY'
-import json, math, sys
+out="$(MAX_ERROR_RATE="${MAX_ERROR_RATE:-0.0001}" python3 - "$scratch/draws.jsonl" <<'PY'
+import json, math, os, sys
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 off = next((r for r in rows if r.get("draw") == "official"), {})
 fresh = [r for r in rows if r.get("draw") != "official"]
@@ -82,8 +85,18 @@ q = next((r["qubits"] for r in rows if "qubits" in r), None)
 mean = sum(tofs) / len(tofs) if tofs else None
 sd = math.sqrt(sum((t - mean) ** 2 for t in tofs) / (len(tofs) - 1)) if len(tofs) > 1 else None
 passed = sum(1 for r in fresh if r.get("ok"))
+tested = sum(r.get("shots", 0) for r in fresh)
+failing = sum(r.get("failing_shots", r.get("classical_failures", 0)) for r in fresh)
+rate = failing / tested if tested else None
+# one-sided 95 % upper bound (Wilson score) on the per-input error rate
+ucb = None
+if tested:
+    z = 1.645; n = tested; ph = failing / n
+    ucb = (ph + z * z / (2 * n) + z * math.sqrt(ph * (1 - ph) / n + z * z / (4 * n * n))) / (1 + z * z / n)
+mx = float(os.environ.get("MAX_ERROR_RATE", "0.0001"))
 res = {
-    "ok": bool(fresh) and passed == len(fresh),
+    "ok": bool(fresh) and rate is not None and rate <= mx and not any(r.get("ancilla_garbage_batches") for r in fresh),
+    "error_rate": rate, "error_rate_ucb95": ucb, "max_error_rate": mx, "failing_shots": failing,
     "draws": len(fresh), "passed": passed,
     "failed_shots": sum(r.get("classical_failures", 0) for r in fresh),
     "garbage_batches": sum(r.get("phase_garbage_batches", 0) + r.get("ancilla_garbage_batches", 0) for r in fresh),

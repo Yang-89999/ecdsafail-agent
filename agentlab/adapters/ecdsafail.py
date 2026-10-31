@@ -84,7 +84,8 @@ class EcdsaFailAdapter(CompetitionAdapter):
         log = Path(worktree) / ".agentlab" / f"fresh_{int(t0)}.log"
         log.parent.mkdir(exist_ok=True)
         rc, out = _run_logged(
-            ["bash", str(SCRIPTS / "fresh_check.sh"), str(worktree), str(draws), str(shots), str(self.root)],
+            ["env", f"MAX_ERROR_RATE={self.cfg.max_error_rate}", "bash", str(SCRIPTS / "fresh_check.sh"), str(worktree),
+             str(draws), str(shots), str(self.root)],
             None, log, self.cfg.solver_timeout_s, f"fresh-inputs check ({draws} draws)")
         for line in reversed(out.strip().splitlines()):
             if line.startswith("{"):
@@ -137,7 +138,8 @@ class EcdsaFailAdapter(CompetitionAdapter):
             "Score = average executed Toffoli per shot x peak qubit width. Lower is better.\n"
             "Never tune to the test set: do not change TAIL_NONCE or any other value whose only effect is which test "
             "inputs are drawn, and never choose between variants by whether their draw happened to pass. A candidate "
-            "counts only if it also passes scripts/fresh_check.sh (independent input draws)."
+            "counts only if its error rate on independent inputs (scripts/fresh_check.sh) is at most "
+            f"{self.cfg.max_error_rate:g}, the level of the published reference circuits."
         )
 
     # --- submission ----------------------------------------------------------

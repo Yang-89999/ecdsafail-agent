@@ -41,8 +41,11 @@ wrong on a small share of inputs can therefore pass the official draw, and every
 draw, exposes those latent failures. `scripts/fresh_check.sh` builds once and evaluates the same op stream on N
 independent draws (`EVAL_SALT` mixed into the hash; unset = the official inputs). Uses: the head's own fresh-draw
 result is cached per commit (`work/head_fresh.json`) and quoted in every Coordinator and executor prompt, so
-inherited failures are recognised as such; the Auditor rejects any candidate that fails a fresh draw; no role may
-change the nonce or keep a variant because its draw passed.
+inherited failures are recognised as such; the Auditor rejects any candidate whose error rate on fresh inputs exceeds
+`max_error_rate` = 1e-4 (2^-13.3, the level of Babbush et al. 2026 and Schrottenloher 2026, arXiv 2606.02235, both
+approximate); no role may change the nonce or keep a variant because its draw passed. The organisers' paper
+(arXiv 2609.09582) states "Exactness is not required", describes nonce search for "clean validation islands", and
+reports 0.19 % independent error for its cutoff leader 8e9c9a2.
 
 Measured 2026-10-31 on head 5ba2d2d (912,518,320): the official draw passes (0 wrong); 8 fresh draws all fail, 147 wrong
 results in 72,192 inputs (0.20 %, 10 to 23 per draw) and phase garbage in 99 of 1,128 batches; average Toffoli

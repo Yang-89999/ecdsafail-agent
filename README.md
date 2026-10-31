@@ -130,6 +130,7 @@ the exact name shown by `/model` inside `codex`. The ledger records the model fo
 - Fresh inputs: the official harness tests one input draw derived from a hash of the op stream, and public
   submissions re-roll that draw through `TAIL_NONCE`. `scripts/fresh_check.sh` tests the same op stream on
   independent draws (`fast_eval` with `EVAL_SALT`, which mixes a salt into the hash; unset, the inputs are the
-  official ones). The audit rejects a candidate that fails any fresh draw, every prompt carries the public head's
-  own fresh-draw result (so failures it already has are known as inherited), and no role may change the nonce or
-  pick a variant because its draw passed.
+  official ones) and reports the error rate with a 95 % bound. The standard is the published reference circuits'
+  (Babbush et al. 2026, Schrottenloher 2026, both approximate): at most 2^-13.3 ≈ 1e-4 (`max_error_rate`). The audit
+  rejects a candidate above it, every prompt carries the public head's own fresh-draw result (so failures it already
+  has are known as inherited), and no role may change the nonce or pick a variant because its draw passed.

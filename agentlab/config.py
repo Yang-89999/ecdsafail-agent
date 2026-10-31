@@ -32,6 +32,7 @@ class Config:
     fast_shots: int = 9024  # the official shot count: eval takes seconds, the build dominates, so the cheap score is the official number
     audit_threshold: float = 0.0  # any strict gain goes to the audit; recent leaderboard steps are ~0.01 %
     fresh_draws: int = 8  # independent input draws for scripts/fresh_check.sh (head baseline, audit)
+    max_error_rate: float = 1e-4  # 2^-13.3: the error level of the published reference circuits (Babbush et al., Schrottenloher)
     solver_timeout_s: int = 8 * 3600  # safety cap only: a run ends when its executor finds a gain or no hope
     explore_c: float = 0.6  # UCB exploration constant on relative gain
     # Submission policy

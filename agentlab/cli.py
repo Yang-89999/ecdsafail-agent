@@ -22,6 +22,9 @@
   agentlab review                     score candidate ideas; accept into the backlog or reject with a reason
   agentlab watch [exp]                readable live view of a solver run (default: the latest)
   agentlab harvest <exp>              copy the notes an earlier run left in its worktree to work/notes (and profile)
+
+Clean-room track (our own circuit, docs/cleanroom.md): set AGENTLAB_CONFIG=agentlab-cleanroom.toml (docker/start.sh
+--cleanroom does it); the same commands then work on work/cleanroom/ (own ledger, backlog, lessons, base).
 """
 
 from __future__ import annotations
@@ -108,11 +111,11 @@ def main(argv: list[str] | None = None) -> int:
         if a.draws:
             cfg.fresh_draws = a.draws
         if a.exp is None:
-            import subprocess as _sp
-            _sp.run(["git", "fetch", "-q", cfg.upstream_remote, cfg.upstream_branch], cwd=adapter.root, check=False)
+            adapter.refresh()
             best = adapter.current_best()
             res = head_fresh(cfg, adapter, best["commit"]) if best else None
-            print(f"public head {best['commit']} (official score {best['score']:,}):" if best else "public head: unknown")
+            who = "our clean-room base" if adapter.kind == "cleanroom" else "public head"
+            print(f"{who} {best['commit']} (official score {best['score']:,}):" if best else f"{who}: unknown")
         else:
             exp = ledger.experiment(a.exp)
             res = adapter.fresh_check(Path(exp["worktree"]), cfg.fresh_draws, cfg.fast_shots)

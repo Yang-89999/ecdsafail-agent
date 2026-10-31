@@ -25,12 +25,34 @@ class ScoreResult:
 
 class CompetitionAdapter:
     name = "base"
+    kind = "leaderboard"  # "leaderboard": beat the public head and submit; "cleanroom": beat our own base, never submit
     editable_paths: list[str] = []
     protected_paths: list[str] = []
 
     def __init__(self, cfg):
         self.cfg = cfg
         self.root: Path = Path(cfg.challenge_dir)
+
+    # --- track ---------------------------------------------------------------
+    def base_ref(self) -> str:
+        """The ref every new experiment worktree starts from."""
+        return f"{self.cfg.upstream_remote}/{self.cfg.upstream_branch}"
+
+    def refresh(self) -> None:
+        """Bring the base up to date (fetch the shared repo)."""
+        self._git(self.root, "fetch", "-q", self.cfg.upstream_remote, self.cfg.upstream_branch)
+
+    def extra_checks(self, wt: Path) -> dict | None:
+        """Track-specific audit check; None when there is none."""
+        return None
+
+    def on_win(self, exp_id: int, clean_wt: Path, verdict: dict) -> str | None:
+        """Called when an audit beats the bar. Leaderboard: nothing (a human approves and submits)."""
+        return None
+
+    def track_brief(self) -> str:
+        """Design brief the thinking roles read instead of the leaderboard trend (empty on the leaderboard track)."""
+        return ""
 
     # --- setup -------------------------------------------------------------
     def ensure_ready(self) -> None:

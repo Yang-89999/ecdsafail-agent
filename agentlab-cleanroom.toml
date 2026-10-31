@@ -1,0 +1,14 @@
+# Clean-room track: our own point adder (cleanroom/point_add) on the unmodified harness.
+# Use it with:  AGENTLAB_CONFIG=agentlab-cleanroom.toml agentlab <command>   (docker/start.sh --cleanroom sets it)
+# Everything else (model, backend, solvers) comes from agentlab.toml.
+adapter = "ecdsafail-cleanroom"
+
+# separate state: its own ledger, backlog, lessons, problem statement, worktrees
+ledger_path = "work/cleanroom/ledger.sqlite"
+runs_dir = "work/cleanroom/runs"
+worktrees_dir = "work/cleanroom/worktrees"
+cleanroom_harness = "work/cleanroom/harness"
+cleanroom_src = "cleanroom/point_add"
+
+target_score = 2992500000   # Google low-gate: 2.1M Toffoli x 1,425 qubits
+max_error_rate = 0.0001

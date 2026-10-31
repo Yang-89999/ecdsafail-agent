@@ -1,7 +1,8 @@
 from .base import CompetitionAdapter, ScoreResult
+from .cleanroom import CleanroomAdapter
 from .ecdsafail import EcdsaFailAdapter
 
-ADAPTERS = {"ecdsafail": EcdsaFailAdapter}
+ADAPTERS = {"ecdsafail": EcdsaFailAdapter, "ecdsafail-cleanroom": CleanroomAdapter}
 
 
 def load_adapter(cfg) -> CompetitionAdapter:

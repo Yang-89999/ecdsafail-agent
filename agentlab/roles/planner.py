@@ -64,9 +64,44 @@ def profile_text(cfg, adapter, limit: int = 8000) -> str:
     return "(no measured profile yet: the profiling idea has not produced src/point_add/memory/profile.md)"
 
 
-def seed_ideas(ledger: Ledger) -> int:
+CLEANROOM_SEEDS = [
+    # The clean-room design's milestones (docs/cleanroom.md), as testable leads with rough priors.
+    ("Profile the clean-room circuit by phase",
+     "Attribute Toffolis and the peak width to each phase of point.rs and each part of euclid.rs (Euclidean pass "
+     "compare / swap / subtract, Bezout double / controlled add / swap, sqsub, classical adds). Write the table to "
+     "src/point_add/PROFILE.md with the peak moment and what is live there. Pure measurement.", 0.08),
+    ("Constant adders without a temporary register",
+     "add_const writes the constant into n fresh qubits and runs a general adder. With the constant known at build time "
+     "each carry is AND or OR of two qubits (no register), and a controlled constant add needs only the control. "
+     "The materialised modulus sits at the peak (Bezout's modadd), so this should cut the width by about 256 and "
+     "save X/CX ops. Unit tests first (moddbl, modadd), then the full score.", 0.08),
+    ("Fewer Euclidean steps, with a measured failure rate",
+     "The pass runs 2n = 512 steps; Schrottenloher reports about 1.413n + 2.4 sqrt(n) suffice except with small "
+     "probability. Measure the step-count distribution for (p, x) with x uniform (classical model, 10^6 samples), pick "
+     "the smallest count within the error budget (<= 6e-5), then build it and fresh_check. Every step removed saves "
+     "about 12n Toffoli across division, multiplication and their Bezout replays.", 0.1),
+    ("Shrinking u and v registers in the Euclidean pass",
+     "u*v halves every step, so u and v need fewer bits as the pass goes on. Compare, swap and subtract on the live "
+     "width only (padded by a few bits, failure measured classically); the freed high qubits can hold the record. "
+     "Expected: Euclidean-pass Toffolis roughly halved and the record no longer adds to the peak.", 0.1),
+    ("Pack the Euclidean record: 3 steps in 5 bits",
+     "Each step has 3 states (even; odd no swap; odd swap), stored in 2 bits. Three steps have 27 states: pack them in "
+     "5 bits with a few Toffolis (Schrottenloher) and unpack in the Bezout replay. Cuts the record from 1,024 toward "
+     "~853 qubits, which is at the peak.", 0.05),
+    ("Cheaper Bezout step: fuse doubling and controlled addition",
+     "Each Bezout step does B = 2B mod p (2n) then B += e*A mod p (5n). Compute 2B + e*A once and reduce with one "
+     "or two compare-and-subtract steps, or keep B lazily reduced with a guard bit; the Bezout replays are about half "
+     "of all Toffolis.", 0.06),
+    ("Cheaper x -= lambda^2",
+     "sqsub costs about 9n^2 (n controlled modular subtractions, n-1 doublings and n-1 halvings to clean up). Try a "
+     "dedicated squaring (cross terms counted once), Horner order that avoids the halvings, or computing lambda^2 into "
+     "freed qubits at a narrow moment.", 0.04),
+]
+
+
+def seed_ideas(ledger: Ledger, kind: str = "leaderboard") -> int:
     n = 0
-    for item in SEED_IDEAS:
+    for item in (CLEANROOM_SEEDS if kind == "cleanroom" else SEED_IDEAS):
         title, why = item[0], item[1]
         prior = item[2] if len(item) > 2 else 0.02
         before = len(ledger.ideas(None))

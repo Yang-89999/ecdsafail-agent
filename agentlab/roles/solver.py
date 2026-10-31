@@ -51,8 +51,10 @@ def solver_prompt(cfg: Config, adapter: CompetitionAdapter, brief: str, wt: Path
     lessons = lessons_text(cfg) or "(none yet)"
     from ..orchestrator import fresh_line
     head_fresh = fresh_line((best or {}).get("fresh"))
-    skill_domain = (load_skill(cfg, "reversible-arith") + "\n\n" + load_skill(cfg, "rust-circuit-dev")
+    dev = "cleanroom-dev" if adapter.kind == "cleanroom" else "rust-circuit-dev"
+    skill_domain = (load_skill(cfg, "reversible-arith") + "\n\n" + load_skill(cfg, dev)
                     + "\n\n" + load_skill(cfg, "design-passes"))
+    who = "Our clean-room base" if adapter.kind == "cleanroom" else "The unmodified public head"
     return f"""You are a Solver in an autoresearch system working on the ECDSA.fail benchmark.
 Your working directory is a git worktree of the challenge repository: {wt}
 
@@ -77,7 +79,7 @@ The official scorer tests ONE input draw, derived from a hash of the op stream; 
 the same circuit on {cfg.fresh_draws} independent draws and prints the error rate and the average Toffoli across draws.
 Our correctness standard is the one of the published reference circuits (Babbush et al. 2026, Schrottenloher 2026):
 an error rate of at most {cfg.max_error_rate:g} on independent inputs. Approximations are allowed within that budget.
-The unmodified public head on fresh inputs: {head_fresh}
+{who} on fresh inputs: {head_fresh}
 So: (1) a failure on the new draw that the unmodified head also shows on fresh draws is INHERITED; do not spend the run
 explaining or repairing it unless your plan brings the error rate within the standard. (2) A variant that wins on
 the official draw but not on the fresh-draw average won by luck: it is not a gain. (3) Never change TAIL_NONCE or any

@@ -21,6 +21,8 @@ Under each open sub-problem list hypotheses: reuse backlog ideas by id where the
 
 ## History and framework
 
+On the clean-room track (your context opens with CLEAN-ROOM DESIGN BRIEF) there is no leaderboard trend: the base is our own exact circuit, the target is Google's 2.99e9, and the brief's milestones (M1 primitives, M2 division) are the first decomposition; ceilings come from the measured profile of our own circuit. The paragraph below applies to the leaderboard track only.
+
 The current head is the baseline to beat, not the framework to think in. Read the leaderboard trend (work/trend.md): every step in it was a real, verified gain by a competitor. Weigh sub-problems by where the history shows gains still arriving versus stages that have gone quiet, and by the size of the steps that actually win (recent merges are about 0.01 % each: many small verified savings, not one large one). Keep at least one open sub-problem that replaces a whole stage's design (a different inversion or multiplication framework, a different allocation scheme) rather than tuning the head's code, with the history as its evidence; label its ceiling and prediction as such.
 
 ## Measurement versus optimisation

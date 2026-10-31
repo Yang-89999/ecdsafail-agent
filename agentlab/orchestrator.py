@@ -66,8 +66,11 @@ def replenish(cfg: Config, adapter, ledger: Ledger, state: dict, force_lit: bool
             print(f"  [replenish] extraction failed: {e}")
     if len(ledger.ideas("open")) < max(3, cfg.solvers):
         try:
-            print(f"  [replenish] backlog low: scouting upstream and brainstorming", flush=True)
-            scout(cfg, adapter, ledger, 10, summarize=True)
+            if adapter.kind == "cleanroom":  # leaderboard submissions stay out of the clean room
+                print(f"  [replenish] backlog low: brainstorming", flush=True)
+            else:
+                print(f"  [replenish] backlog low: scouting upstream and brainstorming", flush=True)
+                scout(cfg, adapter, ledger, 10, summarize=True)
             brainstorm(cfg, adapter, ledger)
         except Exception as e:  # noqa: BLE001
             print(f"  [replenish] failed: {e}")
@@ -109,8 +112,12 @@ def write_status(cfg: Config, ledger: Ledger, state: dict, running: dict | None 
     lines = [f"# agentlab status  ({time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())})", "",
              f"launched: {state['launched']}   finished: {state['finished']}   elapsed: {_fmt(time.time() - state['t0'])}{window}",
              f"backend failures in a row: {state['fails']}", ""]
+    if best and best.get("target"):
+        lines += [f"our base: {best['score']:,} ({best['toffoli']:,.0f} Toffoli x {best['qubits']:,} qubits, commit {best['commit']}); "
+                  f"target {best['target']:,} = {best['score'] / best['target']:.2f}x away", ""]
     if best and best.get("fresh"):
-        lines += [f"public head on fresh inputs: {fresh_line(best['fresh'])}", ""]
+        who = "our base" if best.get("target") else "public head"
+        lines += [f"{who} on fresh inputs: {fresh_line(best['fresh'])}", ""]
     if running:
         lines += ["## Running now", ""] + _running_rows(cfg, ledger, running, best) + [""]
     else:
@@ -119,7 +126,7 @@ def write_status(cfg: Config, ledger: Ledger, state: dict, running: dict | None 
     if latest:
         lines += ["## Coordinator's latest decision  (full log: work/coordinator.md)", "", latest.strip(), ""]
     lines += ["```", ledger.summary_text(25), "```"]
-    audited = ledger.experiments(5, "audited")
+    audited = [] if (best or {}).get("target") else ledger.experiments(5, "audited")
     if audited:
         lines += ["", "## Waiting for your approval"] + [
             f"- exp #{e['id']} score {e['score']:,}  →  `agentlab approve {e['id']} --by Yang` then `agentlab submit {e['id']}`"
@@ -143,11 +150,11 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
     ledger.db.commit()
     if stale:
         print(f"marked {stale} interrupted experiment(s) as abandoned", flush=True)
-    planner.seed_ideas(ledger)
+    planner.seed_ideas(ledger, adapter.kind)
     rng = random.Random()
     solvers = solvers or cfg.solvers
     max_launches = rounds * solvers if rounds else 0
-    base_ref = f"{cfg.upstream_remote}/{cfg.upstream_branch}"
+    base_ref = adapter.base_ref()
     state = {"t0": time.time(), "deadline": time.time() + hours * 3600 if hours else None, "launched": 0, "finished": 0,
              "fails": 0, "pause_until": 0.0, "last_lit": time.time(), "last_decision": 0.0, "empty_decisions": 0,
              "last_ckpt": time.time(), "checkpoint_hours": checkpoint_hours, "stop": None}
@@ -213,10 +220,11 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
 
 
 def _refresh_best(cfg, adapter, ledger):
-    subprocess.run(["git", "fetch", "-q", cfg.upstream_remote, cfg.upstream_branch], cwd=adapter.root, check=False)
+    adapter.refresh()
     best = adapter.current_best()
     if best:
-        ledger.record_best(best["score"], best["toffoli"], best["qubits"], f"upstream:{best['commit']}", verified=True)
+        src = "base" if adapter.kind == "cleanroom" else "upstream"
+        ledger.record_best(best["score"], best["toffoli"], best["qubits"], f"{src}:{best['commit']}", verified=True)
         best = dict(best, fast_score=fast_baseline(cfg, adapter, best["commit"]))
         fresh = head_fresh(cfg, adapter, best["commit"])
         if fresh:
@@ -361,7 +369,9 @@ def _on_finished(cfg, adapter, ledger, fut: Future, r: dict, audit_threshold, st
         try:
             v = auditor.audit(cfg, adapter, ledger, exp_id)
             print(f"  audit #{exp_id}: {'OK' if 'fail' not in v else v['fail']} full={v.get('full', {}).get('score')} beats_best={v.get('beats_best')}", flush=True)
-            if v.get("beats_best"):
+            if v.get("adopted"):
+                print(f"  *** exp #{exp_id} beats our base: {v['adopted']} ***", flush=True)
+            elif v.get("beats_best"):
                 print(f"  *** exp #{exp_id} beats the public bar; waiting for `agentlab approve {exp_id} --by Yang` ***", flush=True)
         except Exception as ex:  # noqa: BLE001
             print(f"  audit #{exp_id} crashed: {ex}", flush=True)
@@ -387,7 +397,7 @@ def _maybe_trend(cfg, adapter, ledger) -> None:
     (measuring ~30 commits takes about an hour; the Strategist's next revision reads the result)."""
     import threading
     from .roles.trend import analyse, stale
-    if cfg.backend == "dry" or not stale(cfg, adapter):
+    if cfg.backend == "dry" or adapter.kind == "cleanroom" or not stale(cfg, adapter):
         return
     def go():
         try:

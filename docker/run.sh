@@ -15,7 +15,8 @@ echo "== building the agentlab image (first time ~5-10 min; cached afterwards) =
 docker build -t agentlab -f "$here/docker/Dockerfile" "$here"
 tty_flags=(-i)
 [[ -t 0 ]] && tty_flags=(-it)
-exec docker run --rm "${tty_flags[@]}" --name "agentlab-$$" \
+env_args=(); [[ -n "${AGENTLAB_CONFIG:-}" ]] && env_args=(-e "AGENTLAB_CONFIG=$AGENTLAB_CONFIG")
+exec docker run --rm "${tty_flags[@]}" "${env_args[@]}" --name "agentlab-$$" \
   --memory 6g --cpus "$(( $(getconf _NPROCESSORS_ONLN) > 1 ? $(getconf _NPROCESSORS_ONLN) - 1 : 1 ))" \
   -v "$here":/work/ecdsafail-agent \
   -v agentlab-challenge:/root/ecdsafail-challenge \

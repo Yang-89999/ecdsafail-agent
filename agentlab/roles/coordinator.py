@@ -138,6 +138,12 @@ FRESH_NOTE = ("The official harness tests ONE input draw derived from the circui
               "launch nonce searches.")
 
 
+CLEANROOM_NOTE = ("Clean-room track: the base is our own exact circuit; the target is Google's point. Large structural gains are "
+                  "expected here (the design brief lists them by milestone), so prefer runs that change an algorithm "
+                  "(step count, register shrinking, record packing, cheaper primitives) over parameter polishing. Unit tests "
+                  "are the cheap first reward for primitive work; the error rate on fresh inputs must stay <= 1e-4.")
+
+
 def _fresh(best) -> str:
     from ..orchestrator import fresh_line
     return fresh_line((best or {}).get("fresh"))
@@ -179,16 +185,25 @@ def _context(cfg, adapter, ledger, running: list[dict], finished: list[int], fre
     from .lessons import lessons_text
     from .trend import trend_text
     lessons = lessons_text(cfg) or "(none yet)"
-    trend = trend_text(cfg, 3500) or "(not analysed yet)"
-    return f"""LEADERBOARD TREND (synthesis of the merged-submission history; see work/trend.md):
-{trend}
+    bar = ({k: v for k, v in dict(best).items() if k != 'fresh'}) if best else '?'
+    if adapter.kind == "cleanroom":
+        head = f"""CLEAN-ROOM DESIGN BRIEF (docs/cleanroom.md):
+{adapter.track_brief()[:5000]}"""
+        bars = f"""OUR BEST (clean-room base): {bar}   TARGET: {cfg.target_score:,}   (gain = (fast score of the base - fast score of a run) / fast score of the base; a verified gain is adopted as the new base automatically)
+OUR BASE ON FRESH INPUTS: {_fresh(best)}
+{CLEANROOM_NOTE}"""
+    else:
+        head = f"""LEADERBOARD TREND (synthesis of the merged-submission history; see work/trend.md):
+{trend_text(cfg, 3500) or "(not analysed yet)"}"""
+        bars = f"""PUBLIC BAR: {bar}   (gain = (fast_score of the head - fast score of a run) / fast_score of the head, same shots: an unchanged circuit gains exactly 0, any nonzero gain is a real circuit change)
+PUBLIC HEAD ON FRESH INPUTS: {_fresh(best)}
+{FRESH_NOTE}"""
+    return f"""{head}
 
 LESSONS SO FAR (work/lessons.md, revised after every run; what the system has learned):
 {lessons}
 
-PUBLIC BAR: {({k: v for k, v in dict(best).items() if k != 'fresh'}) if best else '?'}   (gain = (fast_score of the head - fast score of a run) / fast_score of the head, same shots: an unchanged circuit gains exactly 0, any nonzero gain is a real circuit change)
-PUBLIC HEAD ON FRESH INPUTS: {_fresh(best)}
-{FRESH_NOTE}
+{bars}
 
 PROBLEM STATEMENT (Strategist):
 {problem or '(none yet)'}

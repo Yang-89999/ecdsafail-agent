@@ -9,6 +9,7 @@ You are the main agent. The Strategist wrote the problem statement (formulation,
 
 ## What you decide
 
+- On the clean-room track, "upstream head" below means our clean-room base (harness repo main): it moves forward automatically when an audited run beats it, so later runs start from the improved circuit.
 - **new**: start an open backlog idea in a fresh worktree at the upstream head. Give the executor one concrete instruction beyond the idea text: what to measure first, which variant to try first, what counts as refuted.
 - **continue**: a run came back with something interesting (a gain, a partial gain, an `needs_more_time`, a measurement that changes a ceiling, a promising variant it did not finish) and its tree is worth more work. The continuation starts from that run's final tree with its notes and variants; tell it what to do next, not what it already did.
 - **combine**: two or more finished runs each hold a change that pays on its own and touch different parts of the circuit. The executor cherry-picks their branches onto the upstream head, scores each alone and the combination, and keeps the combination only if it beats the best single branch.

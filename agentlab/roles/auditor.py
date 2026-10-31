@@ -50,9 +50,9 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
         ledger.finish_experiment(exp_id, "rejected", details=verdict)
         return verdict
 
-    # Clean room on the newest upstream head.
-    _sh(["git", "fetch", "-q", cfg.upstream_remote, cfg.upstream_branch], adapter.root)
-    upstream = f"{cfg.upstream_remote}/{cfg.upstream_branch}"
+    # Re-apply on the newest base (upstream head; on the clean-room track, our current base).
+    adapter.refresh()
+    upstream = adapter.base_ref()
     clean = Path(cfg.worktrees_dir) / f"audit{exp_id}"
     if clean.exists():
         _sh(["git", "worktree", "remove", "--force", str(clean)], adapter.root)
@@ -71,6 +71,15 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
         verdict["fail"] = "no commits in the experiment worktree"
         ledger.finish_experiment(exp_id, "rejected", details=verdict)
         return verdict
+
+    extra = adapter.extra_checks(clean)
+    if extra is not None:
+        verdict["extra"] = extra
+        verdict["checks"][extra.get("name", "track_checks")] = bool(extra.get("ok"))
+        if not extra.get("ok"):
+            verdict["fail"] = f"{extra.get('name', 'track checks')} failed: {extra.get('tail', '')[-600:]}"
+            ledger.finish_experiment(exp_id, "rejected", details=verdict)
+            return verdict
 
     h1, h2 = ops_hash(clean), ops_hash(clean)
     verdict["checks"]["deterministic_ops"] = h1 == h2 and len(h1) == 64
@@ -106,4 +115,9 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
     ledger.finish_experiment(exp_id, "audited", score=res.score, shots=9024, toffoli=res.metrics.get("toffoli"),
                              qubits=res.metrics.get("qubits"), worktree=str(clean), details=verdict)
     ledger.record_best(res.score, res.metrics.get("toffoli", 0.0), res.metrics.get("qubits", 0), f"local:{exp_id}", verified=True)
+    if verdict["beats_best"]:
+        adopted = adapter.on_win(exp_id, clean, verdict)
+        if adopted:
+            verdict["adopted"] = adopted
+            ledger.finish_experiment(exp_id, "adopted" if adopted.startswith("adopted") else "audited", details=verdict)
     return verdict

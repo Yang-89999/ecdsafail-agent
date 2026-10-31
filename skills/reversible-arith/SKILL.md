@@ -37,6 +37,6 @@ Typical cost ranking: modular inversion ≫ modular multiplications ≈ squaring
 
 - Harness initial circuit: 3,942,753 Toffoli × 2,715 qubits ≈ 1.07e10.
 - Google (2026) published Pareto points ≈ 2.7e6 × 1,175 and 2.1e6 × 1,425 (≈3.0e9 to 3.2e9).
-- Shared repo head on 2026-10-29: 740,969 × 1,234 = 914,355,746, measured with the official harness in this system. Beat this.
+- Leaderboard head on 2026-10-31: 739,480 × 1,234 = 912,518,320, but wrong on about 0.2 % of fresh inputs (it passes only its nonce-selected draw). Leaderboard track: beat it at <= 1e-4 error. Clean-room track: the target is Google's 2.99e9 with our own module.
 
 Literature to consult when designing: Google's "Securing Elliptic Curve Cryptocurrencies against Quantum Vulnerabilities" (2026, with Zenodo code), Litinski's "How to compute a 256-bit elliptic curve private key with only 50 million Toffoli gates" (2023), Häner et al. "Improved quantum circuits for elliptic curve discrete logarithms" (2020), Roetteler et al. (2017), Gidney "Halving the cost of quantum addition" (2018), Gidney "Windowed quantum arithmetic" (2019).

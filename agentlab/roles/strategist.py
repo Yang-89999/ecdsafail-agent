@@ -111,13 +111,20 @@ def _context(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger) -> str:
     prev_txt = prev.read_text()[:6000] if prev.exists() else "(none yet)"
     from .lessons import lessons_text
     from .trend import trend_text
-    return f"""LEADERBOARD TREND (work/trend.md: measured history of merged submissions and its synthesis; the head is the baseline to beat, not the only framework):
-{trend_text(cfg) or '(not analysed yet)'}
+    if adapter.kind == "cleanroom":
+        head = f"""CLEAN-ROOM DESIGN BRIEF (docs/cleanroom.md; the milestones are the decomposition to start from):
+{adapter.track_brief()}"""
+        bar = f"OUR BEST (the clean-room base; the bar every run must beat): {dict(best) if best else '?'}   TARGET: {cfg.target_score:,}"
+    else:
+        head = f"""LEADERBOARD TREND (work/trend.md: measured history of merged submissions and its synthesis; the head is the baseline to beat, not the only framework):
+{trend_text(cfg) or '(not analysed yet)'}"""
+        bar = f"PUBLIC BAR: {dict(best) if best else '?'}"
+    return f"""{head}
 
 LESSONS SO FAR (work/lessons.md; verified facts, dead ends, what moved the numbers):
 {lessons_text(cfg) or '(none yet)'}
 
-PUBLIC BAR: {dict(best) if best else '?'}
+{bar}
 
 MEASURED PROFILE:
 {prof}
@@ -160,8 +167,7 @@ def _reading_worktree(cfg: Config, adapter: CompetitionAdapter) -> Path:
     wt = Path(cfg.worktrees_dir) / "strategist"
     root = adapter.root
     subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=root, capture_output=True)
-    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(wt), f"{cfg.upstream_remote}/{cfg.upstream_branch}"],
-                   cwd=root, check=True)
+    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(wt), adapter.base_ref()], cwd=root, check=True)
     return wt
 
 

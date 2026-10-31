@@ -23,6 +23,10 @@ class Config:
     editable_path: str = "src/point_add"
     upstream_remote: str = "origin"
     upstream_branch: str = "main"
+    # Clean-room track (adapter "ecdsafail-cleanroom", agentlab-cleanroom.toml)
+    cleanroom_src: Path = ROOT / "cleanroom" / "point_add"  # our module (source of truth)
+    cleanroom_harness: Path = ROOT / "work" / "cleanroom" / "harness"  # harness-only git repo the worktrees come from
+    target_score: int = 2_992_500_000  # Google's low-gate point, 2.1M Toffoli x 1,425 qubits
     # Models
     backend: str = "codex"  # "codex" (codex exec CLI) or "openai" (Responses API tool loop)
     model: str = ""  # empty = backend default; e.g. a Codex model name
@@ -42,14 +46,23 @@ class Config:
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":
+        """agentlab.toml, then an overlay: `--config FILE` or the AGENTLAB_CONFIG environment variable (e.g.
+        agentlab-cleanroom.toml switches to the clean-room track). Relative paths are relative to the repo."""
         cfg = cls()
-        path = path or ROOT / "agentlab.toml"
-        if path.exists():
-            data = tomllib.loads(path.read_text())
+        overlay = path or (Path(os.environ["AGENTLAB_CONFIG"]) if os.environ.get("AGENTLAB_CONFIG") else None)
+        if overlay is not None and not overlay.is_absolute() and not overlay.exists():
+            overlay = ROOT / overlay
+        for p in [ROOT / "agentlab.toml"] + ([overlay] if overlay and overlay.resolve() != (ROOT / "agentlab.toml").resolve() else []):
+            if not p.exists():
+                continue
+            data = tomllib.loads(p.read_text())
             for k, v in data.items():
                 if hasattr(cfg, k):
                     cur = getattr(cfg, k)
-                    setattr(cfg, k, Path(v).expanduser() if isinstance(cur, Path) else v)
+                    if isinstance(cur, Path):
+                        v = Path(v).expanduser()
+                        v = v if v.is_absolute() else ROOT / v
+                    setattr(cfg, k, v)
                 else:
                     cfg.extra[k] = v
         for k in ("backend", "model", "challenge_dir", "solvers", "fast_shots"):

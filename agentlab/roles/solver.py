@@ -61,6 +61,13 @@ HOW TO SCORE ({fast_shots} shots, the official count; under a minute, so score o
 The last line of its output is JSON: {{"ok": true, "score": ..., "metrics": {{"toffoli": ..., "qubits": ...}}}}.
 Only a run that prints ok=true counts. Never edit results.tsv or score.json by hand.
 
+SWEEPING MANY VARIANTS (the main way to work; it runs unattended while you think):
+    python3 {scripts}/sweep.py {wt} --mutate "python3 .agentlab/mutate.py {{v}}" --values 0,1,2,3,4,5,6,7 --shots {fast_shots} --challenge {adapter.root} --keep-best
+    python3 {scripts}/sweep.py {wt} --patches .agentlab/variants --shots {fast_shots} --challenge {adapter.root} --keep-best
+Write a small mutation script (or a folder of patches) that turns one knob of your idea, commit your tree, and sweep.
+Each variant is applied to the committed tree, scored, logged to .agentlab/sweep.jsonl and reverted; --keep-best
+leaves the best winner applied for you to check and commit. Then sweep around the winner.
+
 ASKING THE LITERATURE (allowed network use; 1-3 min; answers are cached and cited):
     bash {scripts}/ask_lit.sh "<one specific technical question>"
 Use it when you hit a sub-problem you cannot settle from the code and notes (e.g. the cheapest known way to do

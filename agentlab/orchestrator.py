@@ -52,11 +52,18 @@ def replenish(cfg: Config, adapter, ledger: Ledger, state: dict, force_lit: bool
         try:
             n = harvest(cfg, ledger, None, None, 10, recent=True)
             print(f"  [replenish] literature refresh: {n} new papers", flush=True)
-            if n:
-                extract(cfg, ledger)
         except Exception as e:  # noqa: BLE001
             print(f"  [replenish] literature refresh failed: {e}")
         state["last_lit"] = time.time()
+    # Papers fetched by hand (`agentlab lit-scout --fetch-only`) or by the refresh are read a few batches per
+    # decision, so a large fetch does not hold up the first launches of a unit.
+    unread = len(ledger.papers(unextracted_only=True))
+    if unread:
+        try:
+            print(f"  [replenish] reading {min(unread, 32)} of {unread} unread papers", flush=True)
+            extract(cfg, ledger, max_batches=4)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [replenish] extraction failed: {e}")
     if len(ledger.ideas("open")) < max(3, cfg.solvers):
         try:
             print(f"  [replenish] backlog low: scouting upstream and brainstorming", flush=True)

@@ -67,7 +67,9 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
         verdict["checks"]["applies_on_upstream_head"] = cp.returncode == 0
         if cp.returncode != 0:
             _sh(["git", "cherry-pick", "--abort"], clean)
-            verdict["fail"] = "does not apply cleanly on upstream head: " + cp.stderr[-500:]
+            verdict["fail"] = (("conflicts with our current base (a gain was adopted after this run started): combine it with "
+                                "that gain instead of re-running it: " if adapter.own_base else "does not apply cleanly on upstream head: ")
+                               + cp.stderr[-500:])
             ledger.finish_experiment(exp_id, "rejected", details=verdict)
             return verdict
     else:

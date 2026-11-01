@@ -28,6 +28,11 @@ class CompetitionAdapter:
     kind = "leaderboard"  # "leaderboard": beat the public head and submit; "cleanroom": beat our own base, never submit
     editable_paths: list[str] = []
     protected_paths: list[str] = []
+    uses_fresh_check = True  # False: the audit and the baseline skip fresh_check (win mode scores the error rate itself)
+    wants_trend = True  # leaderboard trend analysis of merged submissions
+    own_base = False  # True: base_ref() is our own branch that audited gains move forward
+    seed_set: str | None = None  # planner seed list; None = by kind
+    verify_label = "official_benchmark_ok"  # audit check name for full_verify
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -52,6 +57,15 @@ class CompetitionAdapter:
 
     def track_brief(self) -> str:
         """Design brief the thinking roles read instead of the leaderboard trend (empty on the leaderboard track)."""
+        return ""
+
+    def track_note(self, best: dict | None) -> str:
+        """Leaderboard-kind tracks with their own scoring rules: the note the Coordinator reads instead of the
+        fresh-inputs note (empty: the default)."""
+        return ""
+
+    def scoring_text(self, cfg, wt: Path, scripts: Path, best: dict | None) -> str:
+        """The solver prompt's HOW TO SCORE / SWEEPING / FRESH INPUTS sections; empty = the default text."""
         return ""
 
     # --- setup -------------------------------------------------------------

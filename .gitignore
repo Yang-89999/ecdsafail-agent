@@ -10,3 +10,5 @@ tools/nonce_search/target/
 tools/nonce_search/src/
 tools/nonce_search/Cargo.toml
 tools/nonce_search/Cargo.lock
+tools/nonce_search/.agentlab-version
+tools/nonce_search/build-offline.log

@@ -31,7 +31,7 @@ def make_worktree(cfg: Config, adapter: CompetitionAdapter, exp_id: int, base_re
     wt = Path(cfg.worktrees_dir) / f"exp{exp_id}"
     if wt.exists():
         subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=adapter.root, check=False)
-    branch = f"agentlab/exp{exp_id}"
+    branch = f"{cfg.branch_prefix}exp{exp_id}"
     subprocess.run(["git", "branch", "-D", branch], cwd=adapter.root, capture_output=True)
     subprocess.run(["git", "worktree", "add", "-q", "-b", branch, str(wt), base_ref], cwd=adapter.root, check=True)
     base = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=wt, capture_output=True, text=True).stdout.strip()
@@ -55,13 +55,7 @@ def solver_prompt(cfg: Config, adapter: CompetitionAdapter, brief: str, wt: Path
     skill_domain = (load_skill(cfg, "reversible-arith") + "\n\n" + load_skill(cfg, dev)
                     + "\n\n" + load_skill(cfg, "design-passes"))
     who = "Our clean-room base" if adapter.kind == "cleanroom" else "The unmodified public head"
-    return f"""You are a Solver in an autoresearch system working on the ECDSA.fail benchmark.
-Your working directory is a git worktree of the challenge repository: {wt}
-
-RULES (from the competition; violating any of them makes the run worthless):
-{adapter.rules_text()}
-
-HOW TO SCORE ({fast_shots} shots, the official count; under a minute, so score often; the number is the official one):
+    scoring = adapter.scoring_text(cfg, wt, scripts, best) or f"""HOW TO SCORE ({fast_shots} shots, the official count; under a minute, so score often; the number is the official one):
     bash {scripts}/fast_score.sh {wt} {fast_shots} {adapter.root}
 The last line of its output is JSON: {{"ok": true, "score": ..., "metrics": {{"toffoli": ..., "qubits": ...}}}}.
 Only a run that prints ok=true counts. Never edit results.tsv or score.json by hand.
@@ -83,7 +77,14 @@ an error rate of at most {cfg.max_error_rate:g} on independent inputs. Approxima
 So: (1) a failure on the new draw that the unmodified head also shows on fresh draws is INHERITED; do not spend the run
 explaining or repairing it unless your plan brings the error rate within the standard. (2) A variant that wins on
 the official draw but not on the fresh-draw average won by luck: it is not a gain. (3) Never change TAIL_NONCE or any
-value whose only effect is which inputs get drawn, and never pick a variant because its draw passed.
+value whose only effect is which inputs get drawn, and never pick a variant because its draw passed."""
+    return f"""You are a Solver in an autoresearch system working on the ECDSA.fail benchmark.
+Your working directory is a git worktree of the challenge repository: {wt}
+
+RULES (from the competition; violating any of them makes the run worthless):
+{adapter.rules_text()}
+
+{scoring}
 
 ASKING THE LITERATURE (allowed network use; 1-3 min; answers are cached and cited):
     bash {scripts}/ask_lit.sh "<one specific technical question>"
@@ -151,7 +152,7 @@ def run_solver(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, idea_id
         exp_id = ledger.start_experiment(idea_id, "", "", cfg.model or cfg.backend, note=brief.splitlines()[0][:200])
     if mode == "continue" and parents:
         parent = ledger.experiment(parents[0])
-        wt, head0 = make_worktree(cfg, adapter, exp_id, f"agentlab/exp{parents[0]}")
+        wt, head0 = make_worktree(cfg, adapter, exp_id, f"{cfg.branch_prefix}exp{parents[0]}")
         base = (parent["base_commit"] if parent and parent["base_commit"] else head0)
     else:
         wt, base = make_worktree(cfg, adapter, exp_id, base_ref)

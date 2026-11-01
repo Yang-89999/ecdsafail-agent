@@ -29,6 +29,7 @@ path = "src/main.rs"
 quantum_ecc = { path = "$challenge" }
 alloy-primitives = "1.5"
 sha3 = "0.10"
+keccak = { version = "0.1", features = ["asm"] }
 zstd = "0.13"
 
 [profile.release]
@@ -36,6 +37,18 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 TOML
-cp "$here/tools/fast_eval/Cargo.lock" "$crate/Cargo.lock" 2>/dev/null || true
-(cd "$crate" && cargo build --release -q)
+# Pin to the harness's dependency versions (every crate used here is already a harness dependency, so the build
+# works offline in the container).
+cp "$challenge/Cargo.lock" "$crate/Cargo.lock" 2>/dev/null || true
+export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$challenge/rust-toolchain")}"
+# Built for this machine's CPU (AVX-512 Keccak on x86 when present; SHA3 instructions on Apple silicon).
+export RUSTFLAGS="${RUSTFLAGS:--C target-cpu=native}"
+cd "$crate"
+if ! cargo build --release --offline -q 2> build-offline.log; then
+  tail -5 build-offline.log >&2
+  echo "offline build failed; trying with network" >&2
+  cargo build --release -q || { echo "!! nonce_search build failed" >&2; exit 1; }
+fi
+# win_score.sh rebuilds when this stamp differs from its own (an older binary lacks crnfast or its failing-shot counts)
+echo "3" > "$crate/.agentlab-version"
 echo "built $crate/target/release/nonce_search"

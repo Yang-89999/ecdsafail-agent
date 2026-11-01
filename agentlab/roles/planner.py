@@ -99,9 +99,43 @@ CLEANROOM_SEEDS = [
 ]
 
 
+WIN_SEEDS = [
+    # Win mode (docs/win.md): the official-draw track reverted candidates only because their redrawn official draw failed.
+    ("Re-test exp 57: exact six-AND T[6] replacement",
+     "On the official-draw track exp 57 implemented the complete six-AND T[6] replacement (restoration and phase cleanup), "
+     "then restored production because the redrawn official draw failed, and committed the candidate, tests and evidence as "
+     "0bea9232 (branch agentlab/exp57 in the challenge repo). That verdict was the draw, not the circuit. Bring the candidate "
+     "onto the base, enable it in the active emission path, and win-score it: an exact saving shows as d_tof < 0 with "
+     "d_lambda 0. Expected about -1 Toffoli per shot.", 0.12),
+    ("Re-test exp 54: classical-prefix workspace replacement",
+     "Exp 54 tested a classical-prefix workspace replacement through the active emission path and disabled it after the "
+     "official draw rejected it (branch agentlab/exp54 in the challenge repo; its notes may be in work/notes/exp54/). "
+     "Re-enable it on the base and win-score it.", 0.1),
+    ("Re-score the official-draw track's reverted candidates",
+     "On the official-draw track (ledger work/ledger.sqlite, notes work/notes/expN/, branches agentlab/expN in the challenge "
+     "repo) candidates were judged by one redrawn official draw, which fails for almost any edit, and several were reverted "
+     "for that reason only: e.g. exp 53 low-child replacement with classical bias absorption (c83b4e30), exp 56 encoded "
+     "carries through the next upper columns (f75ed483). List those experiments, re-apply each committed candidate on the "
+     "base, win-score it, and keep every one with d_tof < 0 and acceptable d_lambda. Report a table (exp, commit, d_tof, "
+     "d_lambda).", 0.1),
+    ("Map approximation knobs: Toffoli saved per lambda",
+     "The head build = apply_merged_policy(divide_prefix::prefix()): a frozen op stream plus post-passes (cmp_policy, "
+     "direct_policy, generic_compare widths, value_narrow cuts), then source_edits tables keyed to exact op positions. "
+     "Recipe env knobs (HEO_PIN_*) are inert in the build, and changing a value_narrow cut breaks the position-keyed "
+     "source_edits (panic). Find which approximation widths can be changed live (or how to regenerate the position tables), "
+     "and measure each step's d_tof and d_lambda with win_score.sh. The leaders' notes (leapfrog.rs) show lambda "
+     "bought back at ~700 Toffoli per unit and sold at ~1,400-2,250; we charge 1,000 per lambda above the public head's.", 0.08),
+    ("Trade error rate for Toffoli at the best price",
+     "Each lambda above the public head's costs 1,000 Toffoli per shot in the score; buying lambda back earns the same. Find "
+     "the approximation sites (comparison widths, carry truncations, lookup windows, early uncomputation) with the most "
+     "Toffoli per unit of lambda: sell where it is above 1,000, buy back where it is below, and confirm with 96 draws.", 0.06),
+]
+
+
 def seed_ideas(ledger: Ledger, kind: str = "leaderboard") -> int:
     n = 0
-    for item in (CLEANROOM_SEEDS if kind == "cleanroom" else SEED_IDEAS):
+    seeds = {"cleanroom": CLEANROOM_SEEDS, "win": WIN_SEEDS + SEED_IDEAS}.get(kind, SEED_IDEAS)
+    for item in seeds:
         title, why = item[0], item[1]
         prior = item[2] if len(item) > 2 else 0.02
         before = len(ledger.ideas(None))

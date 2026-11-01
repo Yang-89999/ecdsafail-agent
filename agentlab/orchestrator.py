@@ -89,7 +89,7 @@ def _running_rows(cfg: Config, ledger: Ledger, running: dict, best) -> list[str]
             bestcol = f"{prog['best_score']:,}"
             if best:
                 ref = best.get("fast_score") or best["score"]
-                bestcol += f" ({(ref - prog['best_score']) / ref * 100:+.3f} %)"
+                bestcol += f" ({(ref - prog['best_score']) / ref * 100:+.5f} %)"
         last = f"{prog['idle_min']} min ago" if prog["idle_min"] is not None else "-"
         mode = r["mode"] + (f" {r['parents']}" if r["parents"] else "")
         rows.append(f"| #{r['exp_id']} | {('#' + str(r['idea_id']) + ' ' + idea.title[:40]) if idea else '-'} | {mode} | "
@@ -115,6 +115,11 @@ def write_status(cfg: Config, ledger: Ledger, state: dict, running: dict | None 
     if best and best.get("target"):
         lines += [f"our base: {best['score']:,} ({best['toffoli']:,.0f} Toffoli x {best['qubits']:,} qubits, commit {best['commit']}); "
                   f"target {best['target']:,} = {best['score'] / best['target']:.2f}x away", ""]
+    if best and best.get("mode") == "win":
+        lines += [f"win mode: our base {best['commit']} ({best.get('label', '')}) scores {best['score']:,} on the audit draws "
+                  f"({best['toffoli']:,.3f} effective Toffoli x {best['qubits']:,}); lead over the public head "
+                  f"{best['public_commit']}: {best.get('lead_tof', 0):+.3f} Toffoli/shot; lambda {best.get('lambda')} "
+                  f"(public {best.get('public_lambda')}). History of adopted gains: work/win/candidates.md", ""]
     if best and best.get("fresh"):
         who = "our base" if best.get("target") else "public head"
         lines += [f"{who} on fresh inputs: {fresh_line(best['fresh'])}", ""]
@@ -126,7 +131,7 @@ def write_status(cfg: Config, ledger: Ledger, state: dict, running: dict | None 
     if latest:
         lines += ["## Coordinator's latest decision  (full log: work/coordinator.md)", "", latest.strip(), ""]
     lines += ["```", ledger.summary_text(25), "```"]
-    audited = [] if (best or {}).get("target") else ledger.experiments(5, "audited")
+    audited = [] if (best or {}).get("target") or (best or {}).get("mode") == "win" else ledger.experiments(5, "audited")
     if audited:
         lines += ["", "## Waiting for your approval"] + [
             f"- exp #{e['id']} score {e['score']:,}  →  `agentlab approve {e['id']} --by Yang` then `agentlab submit {e['id']}`"
@@ -151,7 +156,7 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
     if stale:
         print(f"marked {stale} interrupted experiment(s) as abandoned", flush=True)
     _reaudit_setup_failures(cfg, adapter, ledger)
-    planner.seed_ideas(ledger, adapter.kind)
+    planner.seed_ideas(ledger, adapter.seed_set or adapter.kind)
     rng = random.Random()
     solvers = solvers or cfg.solvers
     max_launches = rounds * solvers if rounds else 0
@@ -224,10 +229,10 @@ def _refresh_best(cfg, adapter, ledger):
     adapter.refresh()
     best = adapter.current_best()
     if best:
-        src = "base" if adapter.kind == "cleanroom" else "upstream"
+        src = "base" if adapter.kind == "cleanroom" or adapter.own_base else "upstream"
         ledger.record_best(best["score"], best["toffoli"], best["qubits"], f"{src}:{best['commit']}", verified=True)
-        best = dict(best, fast_score=fast_baseline(cfg, adapter, best["commit"]))
-        fresh = head_fresh(cfg, adapter, best["commit"])
+        best = dict(best, fast_score=best.get("fast_score") or fast_baseline(cfg, adapter, best["commit"]))
+        fresh = head_fresh(cfg, adapter, best["commit"]) if adapter.uses_fresh_check else None
         if fresh:
             best["fresh"] = fresh
     return best
@@ -416,7 +421,7 @@ def _maybe_trend(cfg, adapter, ledger) -> None:
     (measuring ~30 commits takes about an hour; the Strategist's next revision reads the result)."""
     import threading
     from .roles.trend import analyse, stale
-    if cfg.backend == "dry" or adapter.kind == "cleanroom" or not stale(cfg, adapter):
+    if cfg.backend == "dry" or adapter.kind == "cleanroom" or not adapter.wants_trend or not stale(cfg, adapter):
         return
     def go():
         try:

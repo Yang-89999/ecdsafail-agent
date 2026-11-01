@@ -12,6 +12,10 @@ set -euo pipefail
 # shellcheck disable=SC1091
 . "$HOME/.cargo/env" 2>/dev/null || true
 wt="$(cd "${1:?worktree}" && pwd -P)"
+if [[ "${AGENTLAB_SCORE_MODE:-}" == "win" ]]; then
+  # win mode (agentlab-win.toml): one official draw says nothing about an edit; score on shared draws instead
+  exec bash "$(cd "$(dirname "$0")" && pwd -P)/win_score.sh" "$wt" "" "${3:-}"
+fi
 # Every result also goes to <worktree>/.agentlab/scores.jsonl so the Coordinator and `agentlab status`
 # can see a running solver's progress (attempts, scored variants, best so far) without waiting for it.
 record() { mkdir -p "$wt/.agentlab"; python3 -c "import json,sys,time; d=json.loads(sys.argv[1]); d['ts']=time.time(); print(json.dumps(d))" "$1" >> "$wt/.agentlab/scores.jsonl" 2>/dev/null || true; echo "$1"; }

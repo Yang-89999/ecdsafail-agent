@@ -23,6 +23,7 @@ class Config:
     editable_path: str = "src/point_add"
     upstream_remote: str = "origin"
     upstream_branch: str = "main"
+    branch_prefix: str = "agentlab/"  # experiment/audit branches in the challenge repo: <prefix>exp<N>, <prefix>audit<N>
     # Clean-room track (adapter "ecdsafail-cleanroom", agentlab-cleanroom.toml)
     cleanroom_src: Path = ROOT / "cleanroom" / "point_add"  # our module (source of truth)
     cleanroom_harness: Path = ROOT / "work" / "cleanroom" / "harness"  # harness-only git repo the worktrees come from
@@ -37,6 +38,13 @@ class Config:
     audit_threshold: float = 0.0  # any strict gain goes to the audit; recent leaderboard steps are ~0.01 %
     fresh_draws: int = 8  # independent input draws for scripts/fresh_check.sh (head baseline, audit)
     max_error_rate: float = 1e-4  # 2^-13.3: the error level of the published reference circuits (Babbush et al., Schrottenloher)
+    # Win mode (adapter "ecdsafail-win", agentlab-win.toml): scored on shared input draws, paired with our base
+    win_base_branch: str = "agentlab/win-base"  # our base in the challenge repo (starts at the public head)
+    win_fast_draws: int = 24  # draws per score (salts 0..23)
+    win_audit_draws: int = 96  # draws per audit, on other salts
+    win_audit_salt: int = 1_000_000  # first audit salt
+    win_lambda_budget: float = 0.0  # lambda above the public head's that costs nothing (the leaders hold theirs at a cap)
+    win_tof_per_lambda: float = 1000.0  # Toffoli per shot charged per lambda beyond the budget (leaders: buy ~700, sell ~1,400-2,250)
     solver_timeout_s: int = 8 * 3600  # safety cap only: a run ends when its executor finds a gain or no hope
     explore_c: float = 0.6  # UCB exploration constant on relative gain
     # Submission policy

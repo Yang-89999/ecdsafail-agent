@@ -104,7 +104,7 @@ def live_progress(worktree: str | None, log: str | None) -> dict:
 
 
 def branch_exists(adapter: CompetitionAdapter, exp_id: int) -> bool:
-    r = subprocess.run(["git", "rev-parse", "--verify", "-q", f"agentlab/exp{exp_id}"], cwd=adapter.root, capture_output=True)
+    r = subprocess.run(["git", "rev-parse", "--verify", "-q", f"{adapter.cfg.branch_prefix}exp{exp_id}"], cwd=adapter.root, capture_output=True)
     return r.returncode == 0
 
 
@@ -195,7 +195,12 @@ OUR BASE ON FRESH INPUTS: {_fresh(best)}
     else:
         head = f"""LEADERBOARD TREND (synthesis of the merged-submission history; see work/trend.md):
 {trend_text(cfg, 3500) or "(not analysed yet)"}"""
-        bars = f"""PUBLIC BAR: {bar}   (gain = (fast_score of the head - fast score of a run) / fast_score of the head, same shots: an unchanged circuit gains exactly 0, any nonzero gain is a real circuit change)
+        note = adapter.track_note(best)
+        if note:
+            bars = f"""BAR (our base): {bar}   (gain = (score of the base - score of a run) / score of the base, on the same shared draws: an unchanged circuit gains exactly 0, any nonzero gain is a real circuit change)
+{note}"""
+        else:
+            bars = f"""PUBLIC BAR: {bar}   (gain = (fast_score of the head - fast score of a run) / fast_score of the head, same shots: an unchanged circuit gains exactly 0, any nonzero gain is a real circuit change)
 PUBLIC HEAD ON FRESH INPUTS: {_fresh(best)}
 {FRESH_NOTE}"""
     return f"""{head}
@@ -256,7 +261,7 @@ def _validate(launch: dict, ledger: Ledger, adapter, running: list[dict], taken:
         if mode == "continue" and any(r["mode"] == "continue" and r["parents"] == [p] for r in running):
             return f"experiment {p} is already being continued"
         if not branch_exists(adapter, p):
-            return f"experiment {p} left no branch agentlab/exp{p}"
+            return f"experiment {p} left no branch {adapter.cfg.branch_prefix}exp{p}"
         if mode == "continue" and ("continue", p) in taken:
             return f"experiment {p} already continued in this decision"
     return None
@@ -381,7 +386,7 @@ def launch_brief(cfg: Config, ledger: Ledger, launch: dict, best: dict | None) -
         p = launch["parent_exps"][0]
         s = experiment_summary(cfg, ledger, p, variants=15)
         lines = [f"CONTINUE EXPERIMENT #{p}" + (f" (idea #{s['idea']}: {s['title']})" if s.get("idea") else "") + " FROM ITS OWN TREE",
-                 f"Your worktree is that experiment's final tree (its branch agentlab/exp{p}); its commits are in place, do not redo them. "
+                 f"Your worktree is that experiment's final tree (its branch {cfg.branch_prefix}exp{p}); its commits are in place, do not redo them. "
                  "Measure the baseline of this tree first, then take the next step, not the previous one.", "",
                  f"Where it stopped: status {s['status']}, score {s['score']}, gain {s['gain']}, after {s['minutes']} min.",
                  f"What it changed: {s['what']}", f"Why it worked or not: {s['why']}",
@@ -401,7 +406,7 @@ def launch_brief(cfg: Config, ledger: Ledger, launch: dict, best: dict | None) -
              "with cherry-pick, in this order, resolve conflicts, then score:"]
     for p in parents:
         e = ledger.experiment(p)
-        lines.append(f"    git cherry-pick {e['base_commit']}..agentlab/exp{p}")
+        lines.append(f"    git cherry-pick {e['base_commit']}..{cfg.branch_prefix}exp{p}")
     lines += ["Score after each cherry-pick (that gives every branch's contribution in order) and again for the full "
               "combination. The combination counts only if it beats the best single branch; gains may not add, say why if "
               "they do not. If two branches conflict, keep the one with the larger measured gain and port the other's change "

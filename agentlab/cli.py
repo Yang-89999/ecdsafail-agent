@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         for i in ledger.ideas(None):
             extra = f"  <- {i.review[:90]}" if getattr(i, "review", None) else ""
             extra = (f"  [{i.subproblem}]" if getattr(i, "subproblem", None) else "") + extra
-            print(f"[{i.id}] {i.status:9s} prior={i.prior:.3f} tries={i.tries} best={i.best_gain*100:+.3f}%  {i.title}{extra}")
+            print(f"[{i.id}] {i.status:9s} prior={i.prior:.3f} tries={i.tries} best={i.best_gain*100:+.5f}%  {i.title}{extra}")
     elif a.cmd == "run":
         from .orchestrator import run_rounds
         hours = None if a.continuous else ((a.days * 24 if a.days else None) or a.hours)

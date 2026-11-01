@@ -119,6 +119,12 @@ def _context(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger) -> str:
         head = f"""LEADERBOARD TREND (work/trend.md: measured history of merged submissions and its synthesis; the head is the baseline to beat, not the only framework):
 {trend_text(cfg) or '(not analysed yet)'}"""
         bar = f"PUBLIC BAR: {dict(best) if best else '?'}"
+        if adapter.track_brief():
+            head = f"""TRACK BRIEF (docs/win.md; how this track is scored and what to do first):
+{adapter.track_brief()}
+
+{head}"""
+            bar = f"BAR (our base, scored on shared draws): {dict(best) if best else '?'}"
     return f"""{head}
 
 LESSONS SO FAR (work/lessons.md; verified facts, dead ends, what moved the numbers):

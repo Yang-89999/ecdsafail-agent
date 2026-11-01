@@ -6,6 +6,8 @@
 #   docker/start.sh --hours 5 --solvers 2   one bounded unit (launch for 5 h, then let running runs finish)
 #   docker/start.sh --cleanroom     the clean-room track (our own circuit, docs/cleanroom.md): same loop on
 #                                   work/cleanroom/ with its own ledger and base; combine with the options above
+#   docker/start.sh --win           win mode for the leaderboard (docs/win.md): scored on shared input draws, gains
+#                                   stack on our base branch; work/win/ with its own ledger
 #
 # Then:  docker/logs.sh   (follow the log)     docker/shell.sh   (a shell inside; e.g. `agentlab watch`)
 #        docker/stop.sh   (stop the run)
@@ -22,6 +24,10 @@ if [[ "${1:-}" == "--cleanroom" ]]; then
   shift
   # our circuit is larger than the leaderboard's for now (36M ops): each build or evaluation holds ~2.3 GB
   env_args=(-e AGENTLAB_CONFIG=agentlab-cleanroom.toml); mem=8g; track=" (clean-room track)"
+elif [[ "${1:-}" == "--win" ]]; then
+  shift
+  # win mode (docs/win.md): leaderboard circuit scored on shared input draws; gains adopted into agentlab/win-base
+  env_args=(-e AGENTLAB_CONFIG=agentlab-win.toml); mem=8g; track=" (win mode)"
 fi
 args=("$@"); [[ $# -eq 0 ]] && args=(--continuous --solvers 2)
 # on-failure: a crash restarts the loop, a finished unit (clean exit) does not

@@ -1,0 +1,22 @@
+# Win mode for the leaderboard (docs/win.md): candidates are scored on shared input draws, paired with our base and
+# the public head, instead of the official one-draw verdict. Audited gains are adopted as our base (branch
+# agentlab/win-base in the challenge repo), so they stack. Submission comes later: nonce search, official run, approval.
+# Use it with:  AGENTLAB_CONFIG=agentlab-win.toml agentlab <command>   (docker/start.sh --win sets it)
+adapter = "ecdsafail-win"
+
+# separate state: its own ledger, backlog, lessons, problem statement, worktrees (lessons, trend and the problem
+# statement of the official-draw track are copied in on first start)
+ledger_path = "work/win/ledger.sqlite"
+runs_dir = "work/win/runs"
+worktrees_dir = "work/win/worktrees"
+
+win_fast_draws = 24
+win_audit_draws = 96
+# error rate: no worse than the public head's for free; each lambda (expected failing batches per draw) above it is
+# charged 1,000 Toffoli per shot (the leaders' own trades, src/point_add/leapfrog.rs: buy-backs at ~700, sells at ~1,400-2,250)
+win_lambda_budget = 0.0
+win_tof_per_lambda = 1000.0
+
+# experiment branches agentlab/win-exp<N> in the challenge repo: the official-draw track's agentlab/exp<N> (exp 57's
+# candidate among them) stay untouched
+branch_prefix = "agentlab/win-"

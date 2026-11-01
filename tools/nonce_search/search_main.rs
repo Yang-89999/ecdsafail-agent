@@ -9,6 +9,9 @@
 //   nonce_search check  <nonce>                      full official test of one nonce (no early stop)
 //   nonce_search search <start> <count> [threads]    early-stop search; prints stats; CLEAN lines for clean draws
 //   nonce_search selftest                            fast fixed-base k*G vs the harness's curve.mul
+//   nonce_search crn     <start> <count> [threads]   full test of CRN draws (inputs from a fixed salt, not the op
+//                                                    stream): two circuits compared on identical inputs (reference path)
+//   nonce_search crnfast <start> <count> [threads]   the same on the multi-lane fast path; last line JSON (win_score.sh)
 //
 // ops.bin is read from the working directory (any nonce in its tail).
 
@@ -248,6 +251,30 @@ fn main() {
         println!("multi-lane squeeze matches scalar for {W} lanes x 2 batches; {:.1} ms per batch per lane", t.elapsed().as_secs_f64() * 1e3 / (2.0 * W as f64));
         return;
     }
+    if mode == "keccakbench" {
+        // portable permutations (what a CPU without AVX-512, e.g. Apple silicon, uses): scalar per lane vs W-lane unrolled
+        let mut a = [[0u64; W]; 25];
+        for i in 0..25 { for w in 0..W { a[i][w] = (i as u64 + 7).wrapping_mul(0x9E3779B97F4A7C15) ^ w as u64; } }
+        let reps = 20000;
+        let t = Instant::now();
+        for _ in 0..reps { keccak_f_wu(&mut a); }
+        let wu = t.elapsed().as_secs_f64() * 1e9 / (reps * W) as f64;
+        let mut s1 = [0u64; 25]; for i in 0..25 { s1[i] = a[i][0]; }
+        let t = Instant::now();
+        for _ in 0..reps * W { keccak_f(&mut s1); }
+        let sc = t.elapsed().as_secs_f64() * 1e9 / (reps * W) as f64;
+        let mut s2 = s1;
+        let t = Instant::now();
+        for _ in 0..reps * W { keccak::f1600(&mut s2); }
+        let kc = t.elapsed().as_secs_f64() * 1e9 / (reps * W) as f64;
+        let mut s3 = s1; keccak_f(&mut s3); let mut s4 = s1; keccak::f1600(&mut s4); assert_eq!(s3, s4);
+        println!("keccak crate f1600: {kc:.0} ns ({:x})", s2[0]);
+        let t = Instant::now();
+        for _ in 0..reps { keccak_f_lanes(&mut a); }
+        let ln = t.elapsed().as_secs_f64() * 1e9 / (reps * W) as f64;
+        println!("ns per lane-permutation: unrolled {W}-lane {wu:.0}, scalar {sc:.0}, keccak_f_lanes (dispatch) {ln:.0}  ({:x})", a[3][1] ^ s1[2]);
+        return;
+    }
     if mode == "selftest" {
         let mut h = Shake256::default();
         h.update(b"nonce-search-selftest");
@@ -274,7 +301,8 @@ fn main() {
     for op in &ops[n - 96..] { assert!(op.kind == OperationType::X, "tail is not 96 X ops"); }
     let (total_qubits, num_bits, _num_regs, regs) = analyze_ops(ops.iter());
     let t0 = Instant::now();
-    let prefix = prefix_state(&ops);
+    // the Fiat-Shamir prefix is only needed for nonce-derived draws (crn draws come from a salt)
+    let prefix = if matches!(mode, "crn" | "crnfast" | "stats") { Shake256::default() } else { prefix_state(&ops) };
     let tail: Vec<Op> = ops[n - 96..].to_vec();
     eprintln!("loaded {} ops, {} qubits; prefix hashed in {:.1} s", n, total_qubits, t0.elapsed().as_secs_f64());
     match mode {
@@ -446,6 +474,44 @@ fn main() {
             let mt = r.iter().map(|x| x.1).sum::<f64>() / k;
             println!("CRN {} draws: failing batches/draw {fb:.3}, lambda {:.3}, avg Toffoli {mt:.3}", r.len(), -141.0 * (1.0 - fb / 141.0).ln());
         }
+        "crnfast" => {
+            // crn on the fast multi-lane path: same draws and numbers as crn (verified by crncheck), ~W x faster.
+            // Last line is JSON for scripts/win_score.sh.
+            let start: u64 = args[2].parse().expect("start");
+            let count: u64 = args[3].parse().expect("count");
+            let threads: usize = args.get(4).and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+            let t = Instant::now();
+            let (cops, n_rng) = compile_ops(&ops);
+            let fx = Fixed8::new(&curve, Fixed::new(&curve));
+            let next = AtomicU64::new(start);
+            let threads = threads.min(((count as usize) + W - 1) / W).max(1);
+            let mut r: Vec<DrawRes> = std::thread::scope(|s| {
+                let hs: Vec<_> = (0..threads).map(|_| s.spawn(|| crn_fast_thread(&cops, n_rng, total_qubits as usize, num_bits as usize,
+                    &regs, &curve, &fx, &next, start + count))).collect();
+                hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+            });
+            r.sort_by_key(|d| d.salt);
+            for d in &r {
+                println!("crn {} failing_batches {} classical {} phase_batches {} avg_tof {:.3}", d.salt, d.failing, d.classical, d.phase_b,
+                         d.tof as f64 / d.shots.max(1) as f64);
+            }
+            let k = r.len() as f64;
+            let fb = r.iter().map(|d| d.failing as f64).sum::<f64>() / k;
+            let mt = r.iter().map(|d| d.tof as f64 / d.shots as f64).sum::<f64>() / k;
+            let secs = t.elapsed().as_secs_f64();
+            let cl = r.iter().map(|d| d.classical as f64).sum::<f64>() / k;
+            let fs = r.iter().map(|d| d.fail_shots as f64).sum::<f64>() / k;
+            let po = r.iter().map(|d| d.phase_shots as f64).sum::<f64>() / k;
+            println!("CRN {} draws: failing batches/draw {fb:.3}, lambda {:.3}, avg Toffoli {mt:.3} ({secs:.1} s on {threads} threads); \
+                      per draw: classical failures {cl:.3}, failing shots {fs:.3}, phase-only shots {po:.3}",
+                     r.len(), -141.0 * (1.0 - fb / 141.0).ln());
+            // per draw: salt, failing batches, classical failures, phase batches, Toffoli total, shots, failing shots, phase-only shots
+            let per: Vec<String> = r.iter().map(|d| format!("[{},{},{},{},{},{},{},{}]", d.salt, d.failing, d.classical, d.phase_b, d.tof,
+                                                            d.shots, d.fail_shots, d.phase_shots)).collect();
+            println!("{{\"draws\": {}, \"qubits\": {}, \"failing_batches_per_draw\": {fb:.4}, \"avg_tof\": {mt:.4}, \"seconds\": {secs:.1}, \
+                      \"per_draw\": [{}]}}", r.len(), total_qubits, per.join(","));
+        }
         "stats" => {
             let mut counts = std::collections::BTreeMap::new();
             let (mut cond_ops, mut max_q, mut max_b) = (0usize, 0u64, 0u64);
@@ -501,20 +567,23 @@ fn compile_ops(ops: &[Op]) -> (Vec<COp>, usize) {
 
 const RNG_CHUNK: usize = 2048;
 struct Lanes { q: Vec<[u64; W]>, b: Vec<[u64; W]>, phase: [u64; W], rng: Vec<[u64; W]>,
-               kst: [[u64; W]; 25], kused: [usize; W], kactive: [bool; W], n_rng: usize }
+               kst: [[u64; W]; 25], kused: [usize; W], kactive: [bool; W], n_rng: usize, tof: [u64; W] }
 
 impl Lanes {
     fn new(nq: usize, nb: usize, n_rng: usize) -> Self {
         Lanes { q: vec![[0; W]; nq], b: vec![[0; W]; nb], phase: [0; W], rng: vec![[0; W]; RNG_CHUNK],
-                kst: [[0; W]; 25], kused: [RATE_W; W], kactive: [false; W], n_rng }
+                kst: [[0; W]; 25], kused: [RATE_W; W], kactive: [false; W], n_rng, tof: [0; W] }
     }
     fn clear_lane(&mut self, w: usize) {
         for e in &mut self.q { e[w] = 0; }
         for e in &mut self.b { e[w] = 0; }
         self.phase[w] = 0;
+        self.tof[w] = 0;
     }
+    /// One pass of the op stream over all lanes. COUNT: add executed CCX/CCZ shots per lane to tof (sim.rs counts
+    /// cond.count_ones() over all 64 shot bits, padded shots of a short last batch included).
     #[inline(never)]
-    fn pass(&mut self, cops: &[COp]) {
+    fn pass<const COUNT: bool>(&mut self, cops: &[COp]) {
         let mut stack: Vec<[u64; W]> = Vec::new();
         let mut base = [u64::MAX; W];
         let mut ri = RNG_CHUNK; // index in the current chunk
@@ -534,13 +603,15 @@ impl Lanes {
         let q = &mut self.q;
         let b = &mut self.b;
         let phase = &mut self.phase;
+        let tof = &mut self.tof;
         for op in cops {
             let mut cond = base;
             if op.c != 0 { let cb = b[op.cc as usize]; for w in 0..W { cond[w] &= cb[w]; } }
             match op.k {
                 K_CX => { let a = q[op.q1 as usize]; let t = &mut q[op.qt as usize]; for w in 0..W { t[w] ^= cond[w] & a[w]; } }
                 K_CCX => { let a = q[op.q1 as usize]; let c2 = q[op.q2 as usize]; let t = &mut q[op.qt as usize];
-                           for w in 0..W { t[w] ^= cond[w] & a[w] & c2[w]; } }
+                           for w in 0..W { t[w] ^= cond[w] & a[w] & c2[w]; }
+                           if COUNT { for w in 0..W { tof[w] += cond[w].count_ones() as u64; } } }
                 K_X => { let t = &mut q[op.qt as usize]; for w in 0..W { t[w] ^= cond[w]; } }
                 K_CZ => { let a = q[op.qt as usize]; let c1 = q[op.q1 as usize]; for w in 0..W { phase[w] ^= cond[w] & a[w] & c1[w]; } }
                 K_SWAP => {
@@ -562,7 +633,8 @@ impl Lanes {
                 }
                 K_Z => { let a = q[op.qt as usize]; for w in 0..W { phase[w] ^= cond[w] & a[w]; } }
                 K_CCZ => { let a = q[op.qt as usize]; let c1 = q[op.q1 as usize]; let c2 = q[op.q2 as usize];
-                           for w in 0..W { phase[w] ^= cond[w] & a[w] & c1[w] & c2[w]; } }
+                           for w in 0..W { phase[w] ^= cond[w] & a[w] & c1[w] & c2[w]; }
+                           if COUNT { for w in 0..W { tof[w] += cond[w].count_ones() as u64; } } }
                 K_NEG => { for w in 0..W { phase[w] ^= cond[w]; } }
                 K_BINV => { let bb = &mut b[op.cb as usize]; for w in 0..W { bb[w] ^= cond[w]; } }
                 K_B0 => { let bb = &mut b[op.cb as usize]; for w in 0..W { bb[w] &= !cond[w]; } }
@@ -609,7 +681,20 @@ struct Slot { nonce: u64, st: [u64; 25], used: usize, ks: Vec<(U256, U256)>, nex
               shots: Vec<((U256, U256), (U256, U256), (U256, U256))> }
 
 fn open_slot(prefix: &MyShake, tail: &[Op], nonce: u64) -> Slot {
-    let (mut st, mut used) = my_seed(prefix, tail, nonce);
+    let (st, used) = my_seed(prefix, tail, nonce);
+    slot_from_stream(nonce, st, used)
+}
+
+/// A CRN draw: the stream is SHAKE256("agentlab-crn-draw" || salt as 8 LE bytes), as in the reference crn mode.
+fn open_crn_slot(salt: u64) -> Slot {
+    let mut h = MyShake::new();
+    h.update(b"agentlab-crn-draw");
+    h.update(&salt.to_le_bytes());
+    let (st, used) = h.finalize();
+    slot_from_stream(salt, st, used)
+}
+
+fn slot_from_stream(nonce: u64, mut st: [u64; 25], mut used: usize) -> Slot {
     let mut words = vec![0u64; NUM_TESTS * 8];
     squeeze_words(&mut st, &mut used, &mut words);
     let ks = words.chunks_exact(8).map(|c| (U256::from_limbs([c[0], c[1], c[2], c[3]]), U256::from_limbs([c[4], c[5], c[6], c[7]]))).collect();
@@ -688,7 +773,7 @@ fn fast_search_thread(cops: &[COp], n_rng: usize, nq: usize, nb: usize, regs: &[
         t_pts.fetch_add((tp * 1e6) as u64, AtOrd::Relaxed);
         t_rng.fetch_add(((prep - tp) * 1e6) as u64, AtOrd::Relaxed);
         let t1 = Instant::now();
-        lanes.pass(cops);
+        lanes.pass::<false>(cops);
         t_sim.fetch_add((t1.elapsed().as_secs_f64() * 1e6) as u64, AtOrd::Relaxed);
         for w in 0..W { if let Some(s) = slots[w].as_mut() { for i in 0..25 { s.st[i] = lanes.kst[i][w]; } s.used = lanes.kused[w]; } }
         for w in 0..W {
@@ -719,6 +804,81 @@ fn fast_search_thread(cops: &[COp], n_rng: usize, nq: usize, nb: usize, regs: &[
         }
     }
     (finished, batches, clean, hist)
+}
+
+/// Per-draw result of a full (no early stop) CRN draw.
+#[derive(Clone, Copy, Default)]
+struct DrawRes { salt: u64, failing: usize, classical: usize, phase_b: usize, ancilla_b: usize, tof: u64, shots: usize,
+                 fail_shots: usize, phase_shots: usize }
+
+/// Full official test of CRN draws on one thread, W draws per pass, with per-lane Toffoli counts. Same checks as
+/// test_nonce (every batch: classical per shot, phase, ancilla after zeroing the register qubits).
+fn crn_fast_thread(cops: &[COp], n_rng: usize, nq: usize, nb: usize, regs: &[Vec<QubitOrBit>], curve: &WeierstrassEllipticCurve,
+                   fx: &Fixed8, next: &AtomicU64, end: u64) -> Vec<DrawRes> {
+    let ids = |r: &Vec<QubitOrBit>| -> Vec<usize> { r.iter().map(|x| match x { QubitOrBit::Qubit(q) => q.0 as usize, QubitOrBit::Bit(b) => b.0 as usize }).collect() };
+    let (rx, ry, rox, roy) = (ids(&regs[0]), ids(&regs[1]), ids(&regs[2]), ids(&regs[3]));
+    let reg_qubits: Vec<usize> = regs.iter().flat_map(|r| r.iter().filter_map(|x| match x { QubitOrBit::Qubit(q) => Some(q.0 as usize), _ => None })).collect();
+    let mut lanes = Lanes::new(nq, nb, n_rng);
+    let mut slots: Vec<Option<Slot>> = (0..W).map(|_| None).collect();
+    let mut acc = [DrawRes::default(); W];
+    let mut out = Vec::new();
+    loop {
+        let mut any = false;
+        for w in 0..W {
+            if slots[w].is_none() {
+                let salt = next.fetch_add(1, AtOrd::Relaxed);
+                if salt < end { slots[w] = Some(open_crn_slot(salt)); acc[w] = DrawRes { salt, ..Default::default() }; }
+            }
+            lanes.clear_lane(w);
+            if let Some(s) = slots[w].as_mut() {
+                any = true;
+                fill_batch(s, curve, fx);
+                for i in 0..25 { lanes.kst[i][w] = s.st[i]; }
+                lanes.kused[w] = s.used;
+                for (shot, (t, o, _)) in s.shots.iter().enumerate() {
+                    set_lane_reg(&mut lanes.q, &rx, t.0, w, shot);
+                    set_lane_reg(&mut lanes.q, &ry, t.1, w, shot);
+                    set_lane_reg(&mut lanes.b, &rox, o.0, w, shot);
+                    set_lane_reg(&mut lanes.b, &roy, o.1, w, shot);
+                }
+            }
+        }
+        if !any { break; }
+        for w in 0..W { lanes.kactive[w] = slots[w].is_some(); }
+        lanes.pass::<true>(cops);
+        for w in 0..W {
+            let Some(s) = slots[w].as_mut() else { continue };
+            for i in 0..25 { s.st[i] = lanes.kst[i][w]; }
+            s.used = lanes.kused[w];
+            let a = &mut acc[w];
+            let bs = s.shots.len();
+            let mask: u64 = if bs == 64 { u64::MAX } else { (1u64 << bs) - 1 };
+            a.tof += lanes.tof[w];
+            a.shots += bs;
+            let mut ok = true;
+            let mut cl_mask = 0u64;
+            for (shot, (_, _, e)) in s.shots.iter().enumerate() {
+                if get_lane_reg(&lanes.q, &rx, w, shot) != e.0 || get_lane_reg(&lanes.q, &ry, w, shot) != e.1 {
+                    a.classical += 1; ok = false; cl_mask |= 1 << shot;
+                }
+            }
+            let ph = lanes.phase[w] & mask;
+            // failing shots: classical mismatch or phase bit on the shot (fast_eval's FAILING_SHOTS); phase-only shots
+            a.fail_shots += (cl_mask | ph).count_ones() as usize;
+            a.phase_shots += (ph & !cl_mask).count_ones() as usize;
+            if ph != 0 { a.phase_b += 1; ok = false; }
+            for &qi in &reg_qubits { lanes.q[qi][w] = 0; }
+            if lanes.q.iter().any(|v| v[w] & mask != 0) { a.ancilla_b += 1; ok = false; }
+            if !ok { a.failing += 1; }
+            if bs < 64 || s.next_k >= s.ks.len() {
+                out.push(*a);
+                slots[w] = None;
+            } else {
+                s.batch += 1;
+            }
+        }
+    }
+    out
 }
 
 // ─── own SHAKE256 (Keccak-f[1600]), so the random bits of W draws can be squeezed together with SIMD ─────────
@@ -1150,10 +1310,17 @@ unsafe fn keccak_f_avx512(st: &mut [[u64; 8]; 25]) {
     _mm512_storeu_si512(st[24].as_mut_ptr() as *mut _, a44);
 }
 
+static USE_AVX512: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Keccak-f on all W lanes: AVX-512 (8 lanes per instruction) when the CPU has it; otherwise one lane at a time with
+/// the fastest portable permutation (aarch64: the keccak crate, which uses the ARMv8 SHA3 instructions on Apple silicon;
+/// elsewhere our scalar one, faster than the W-lane unrolled version without wide SIMD). NONCE_NO_AVX512=1 forces the
+/// portable path (for testing it on an AVX-512 machine).
 fn keccak_f_lanes(st: &mut [[u64; W]; 25]) {
     #[cfg(target_arch = "x86_64")]
     {
-        if W % 8 == 0 && std::is_x86_feature_detected!("avx512f") {
+        let avx = *USE_AVX512.get_or_init(|| std::is_x86_feature_detected!("avx512f") && std::env::var_os("NONCE_NO_AVX512").is_none());
+        if W % 8 == 0 && avx {
             for c in 0..W / 8 {
                 let mut part = [[0u64; 8]; 25];
                 for i in 0..25 { part[i].copy_from_slice(&st[i][8 * c..8 * c + 8]); }
@@ -1163,5 +1330,13 @@ fn keccak_f_lanes(st: &mut [[u64; W]; 25]) {
             return;
         }
     }
-    keccak_f_wu(st);
+    for w in 0..W {
+        let mut one = [0u64; 25];
+        for i in 0..25 { one[i] = st[i][w]; }
+        #[cfg(target_arch = "aarch64")]
+        keccak::f1600(&mut one);
+        #[cfg(not(target_arch = "aarch64"))]
+        keccak_f(&mut one);
+        for i in 0..25 { st[i][w] = one[i]; }
+    }
 }

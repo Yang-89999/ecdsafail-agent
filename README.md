@@ -22,11 +22,12 @@ question with citations, and the Idea Reviewer scores each candidate before it c
 ```
 agentlab/            the system (config, ledger, llm backends, adapters, roles, orchestrator, cli)
 skills/              SKILL.md packs the agents are prompted with (core + per-board)
-scripts/             fast_score.sh (cheap metric), build_fast_eval.sh
+scripts/             fast_score.sh (cheap metric), win_score.sh (win mode), build_fast_eval.sh
+tools/nonce_search/  official-evaluator nonce tester and shared-draw (crn) scorer
 tools/fast_eval/     the harness's trusted evaluator, built with a configurable shot count
 work/                ledger.sqlite, worktrees/, runs/<exp>/ (prompt, agent log, report)  [git-ignored]
 cleanroom/point_add/ our own point adder (clean-room track), docs/cleanroom.md its brief
-agentlab.toml        configuration (agentlab-cleanroom.toml: overlay for the clean-room track)
+agentlab.toml        configuration (overlays: agentlab-cleanroom.toml clean-room track, agentlab-win.toml win mode)
 ```
 
 ## Run in Docker (recommended on a Mac)
@@ -88,6 +89,23 @@ base automatically and is committed to `cleanroom/point_add` here. Nothing from 
 `agentlab status` inside the container shows our base and how far it is from the target. An audit that
 stopped on our own setup rather than on the circuit (for example git without an identity) is re-run
 automatically when the loop starts, best gain first, before any new run is launched.
+
+### Win mode: building a lead on the leaderboard
+
+The official harness tests one input draw derived from a hash of the op stream; the public head fails about 20 of
+141 batches on a typical draw and passes only on a draw found by searching TAIL_NONCE (allowed by the organisers).
+So every edit fails its redrawn official draw, whatever it does. Win mode scores circuits on fixed shared draws
+instead, paired with our base and the public head (`scripts/win_score.sh`, `tools/nonce_search crnfast`), with an
+error budget over the public head's rate. Brief: `docs/win.md`.
+
+```bash
+docker/start.sh --win           # same loop, on work/win/ (own ledger; lessons and trend carried over)
+```
+
+Our base is the branch `agentlab/win-base` in the challenge repo (starts at the public head). A run that beats it
+on 24 draws is audited on 96 other draws and adopted, so gains stack (`work/win/candidates.md` lists them).
+Experiment branches are `agentlab/win-exp<N>`, so the earlier track's `agentlab/exp<N>` stay intact. Nothing is
+submitted from the loop: the base needs a nonce search for a clean official draw first, then Yang's approval.
 
 ## Setup (Linux or macOS, without Docker)
 

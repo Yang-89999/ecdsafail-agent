@@ -57,8 +57,8 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
     clean = Path(cfg.worktrees_dir) / f"audit{exp_id}"
     if clean.exists():
         _sh(["git", "worktree", "remove", "--force", str(clean)], adapter.root)
-    _sh(["git", "branch", "-D", f"agentlab/audit{exp_id}"], adapter.root)
-    _sh(["git", "worktree", "add", "-q", "-b", f"agentlab/audit{exp_id}", str(clean), upstream], adapter.root)
+    _sh(["git", "branch", "-D", f"{cfg.branch_prefix}audit{exp_id}"], adapter.root)
+    _sh(["git", "worktree", "add", "-q", "-b", f"{cfg.branch_prefix}audit{exp_id}", str(clean), upstream], adapter.root)
     commits = _sh(["git", "rev-list", "--reverse", f"{exp['base_commit']}..HEAD"], wt).stdout.split()
     if commits:
         # --keep-redundant-commits: a continue/combine run carries commits the base may already hold (an adopted
@@ -94,17 +94,18 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
         return verdict
 
     res = adapter.full_verify(clean, note=f"agentlab audit exp{exp_id}")
-    verdict["checks"]["official_benchmark_ok"] = res.ok
+    verdict["checks"][adapter.verify_label] = res.ok
     verdict["full"] = {"score": res.score, "metrics": res.metrics, "reason": res.reason, "log": res.log_path,
                        "duration_s": res.duration_s}
     if not res.ok:
-        verdict["fail"] = f"official benchmark rejected: {res.reason}"
+        verdict["fail"] = f"{'official benchmark' if adapter.verify_label == 'official_benchmark_ok' else 'shared-draw audit'} rejected: {res.reason}"
         ledger.finish_experiment(exp_id, "rejected", details=verdict)
         return verdict
 
-    fresh = adapter.fresh_check(clean, cfg.fresh_draws, 9024)
+    fresh = adapter.fresh_check(clean, cfg.fresh_draws, 9024) if adapter.uses_fresh_check else {"ok": True, "skipped": True}
     verdict["fresh"] = fresh
-    verdict["checks"]["fresh_inputs_ok"] = bool(fresh.get("ok"))
+    if adapter.uses_fresh_check:
+        verdict["checks"]["fresh_inputs_ok"] = bool(fresh.get("ok"))
     if not fresh.get("ok"):
         verdict["fail"] = (f"error rate on independent inputs {fresh.get('error_rate')} exceeds {cfg.max_error_rate:g} "
                            f"({fresh.get('failing_shots')} failing of {fresh.get('tested_shots')}; {fresh.get('reason', '')})")

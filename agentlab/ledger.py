@@ -278,7 +278,7 @@ class Ledger:
         lines.append("Recent experiments:")
         for e in self.experiments(n):
             sc = f"{e['score']:,}" if e["score"] else "-"
-            g = f"{e['gain']*100:+.3f}%" if e["gain"] is not None else ""
+            g = f"{e['gain']*100:+.5f}%" if e["gain"] is not None else ""
             mode = f" {e['mode']} {e['parents']}" if e["mode"] and e["mode"] != "new" else ""
             lines.append(f"  #{e['id']} idea={e['idea_id']}{mode} {e['status']:9s} score={sc} {g} {e['note'] or ''}".rstrip())
         lines.append("Open ideas (tries, mean gain):")

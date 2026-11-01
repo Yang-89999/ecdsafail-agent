@@ -6,3 +6,7 @@ tools/fast_eval/Cargo.lock
 __pycache__/
 *.egg-info/
 tools/fast_eval/.agentlab-version
+tools/nonce_search/target/
+tools/nonce_search/src/
+tools/nonce_search/Cargo.toml
+tools/nonce_search/Cargo.lock

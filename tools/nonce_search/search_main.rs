@@ -201,6 +201,53 @@ fn main() {
         println!("one batch of rng (778k x 8 bytes): {:.1} ms in 8-byte reads, {:.1} ms bulk ({acc:x} {})", a * 1e3, t.elapsed().as_secs_f64() * 1e3, big[7]);
         return;
     }
+    if mode == "shaketest" {
+        let ops = load_ops(OPS_PATH).unwrap_or_else(|e| panic!("could not load {OPS_PATH}: {e}"));
+        let n = ops.len();
+        let tail: Vec<Op> = ops[n - 96..].to_vec();
+        let (p1, p2) = (prefix_state(&ops), my_prefix(&ops));
+        for nonce in [1u64, 12009835509, 777] {
+            let mut a = seed_for_nonce(&p1, &tail, nonce);
+            let (mut st, mut used) = my_seed(&p2, &tail, nonce);
+            let words = 72_192 + 2 * 778_349 + 5;
+            let mut mine = vec![0u64; words];
+            squeeze_words(&mut st, &mut used, &mut mine);
+            let mut theirs = vec![0u8; words * 8];
+            XofReader::read(&mut a, &mut theirs);
+            let ok = mine.iter().enumerate().all(|(i, w)| *w == u64::from_le_bytes(theirs[8 * i..8 * i + 8].try_into().unwrap()));
+            println!("nonce {nonce}: own SHAKE256 == sha3 over {words} words: {ok}");
+            assert!(ok);
+        }
+        // multi-lane squeeze vs scalar
+        let mut sts = [[0u64; W]; 25];
+        let mut used = [0usize; W];
+        let mut refs = Vec::new();
+        for w in 0..W {
+            let (mut st, mut u) = my_seed(&p2, &tail, 100 + w as u64);
+            let mut skip = vec![0u64; 72_192 + 778_349 * (w % 3)];
+            squeeze_words(&mut st, &mut u, &mut skip);
+            for i in 0..25 { sts[i][w] = st[i]; }
+            used[w] = u;
+            let mut r = vec![0u64; 2 * 778_349];
+            let (mut st2, mut u2) = (st, u);
+            squeeze_words(&mut st2, &mut u2, &mut r);
+            refs.push(r);
+        }
+        let mut out = vec![[0u64; W]; 778_349];
+        let t = Instant::now();
+        for rep in 0..2 {
+            squeeze_lanes(&mut sts, &mut used, &[true; W], &mut out, 778_349);
+            for w in 0..W { for k in 0..778_349 { assert_eq!(out[k][w], refs[w][rep * 778_349 + k], "lane {w} word {k} rep {rep}"); } }
+        }
+        let mut a = [[0u64; W]; 25];
+        for i in 0..25 { for w in 0..W { a[i][w] = (i as u64 + 1).wrapping_mul(0x9E3779B97F4A7C15) ^ w as u64; } }
+        let mut b = a; keccak_f_lanes(&mut b);
+        for w in 0..W { let mut s1 = [0u64; 25]; for i in 0..25 { s1[i] = a[i][w]; } keccak_f(&mut s1); for i in 0..25 { assert_eq!(s1[i], b[i][w]); } }
+        let t2 = Instant::now(); for _ in 0..10000 { keccak_f_lanes(&mut b); }
+        println!("unrolled {W}-lane permutation: {:.0} ns per lane-permutation", t2.elapsed().as_secs_f64() * 1e9 / (10000.0 * W as f64));
+        println!("multi-lane squeeze matches scalar for {W} lanes x 2 batches; {:.1} ms per batch per lane", t.elapsed().as_secs_f64() * 1e3 / (2.0 * W as f64));
+        return;
+    }
     if mode == "selftest" {
         let mut h = Shake256::default();
         h.update(b"nonce-search-selftest");
@@ -331,6 +378,7 @@ fn main() {
                 .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
             let t = Instant::now();
             let (cops, n_rng) = compile_ops(&ops);
+            let myp = my_prefix(&ops);
             let fx = Fixed8::new(&curve, Fixed::new(&curve));
             eprintln!("compiled {} ops ({} rng reads per batch) and the fixed-base table in {:.1} s; {} lanes x 64 shots per pass",
                       cops.len(), n_rng, t.elapsed().as_secs_f64(), W);
@@ -340,7 +388,7 @@ fn main() {
             let t = Instant::now();
             let results: Vec<_> = std::thread::scope(|s| {
                 let hs: Vec<_> = (0..threads).map(|_| s.spawn(|| fast_search_thread(&cops, n_rng, total_qubits as usize, num_bits as usize, &regs,
-                    &prefix, &tail, &curve, &fx, &next, start + count, &tr, &tpts, &tsim, if mode == "compare" { Some(&log) } else { None }))).collect();
+                    &myp, &tail, &curve, &fx, &next, start + count, &tr, &tpts, &tsim, if mode == "compare" { Some(&log) } else { None }))).collect();
                 hs.into_iter().map(|h| h.join().unwrap()).collect()
             });
             let secs = t.elapsed().as_secs_f64();
@@ -422,11 +470,14 @@ fn compile_ops(ops: &[Op]) -> (Vec<COp>, usize) {
     (out, n_rng)
 }
 
-struct Lanes { q: Vec<[u64; W]>, b: Vec<[u64; W]>, phase: [u64; W], rng: Vec<[u64; W]> }
+const RNG_CHUNK: usize = 2048;
+struct Lanes { q: Vec<[u64; W]>, b: Vec<[u64; W]>, phase: [u64; W], rng: Vec<[u64; W]>,
+               kst: [[u64; W]; 25], kused: [usize; W], kactive: [bool; W], n_rng: usize }
 
 impl Lanes {
     fn new(nq: usize, nb: usize, n_rng: usize) -> Self {
-        Lanes { q: vec![[0; W]; nq], b: vec![[0; W]; nb], phase: [0; W], rng: vec![[0; W]; n_rng] }
+        Lanes { q: vec![[0; W]; nq], b: vec![[0; W]; nb], phase: [0; W], rng: vec![[0; W]; RNG_CHUNK],
+                kst: [[0; W]; 25], kused: [RATE_W; W], kactive: [false; W], n_rng }
     }
     fn clear_lane(&mut self, w: usize) {
         for e in &mut self.q { e[w] = 0; }
@@ -437,7 +488,20 @@ impl Lanes {
     fn pass(&mut self, cops: &[COp]) {
         let mut stack: Vec<[u64; W]> = Vec::new();
         let mut base = [u64::MAX; W];
-        let mut ri = 0usize;
+        let mut ri = RNG_CHUNK; // index in the current chunk
+        let mut left = self.n_rng; // rng words still to squeeze this pass
+        let rng = &mut self.rng;
+        let (kst, kused, kactive) = (&mut self.kst, &mut self.kused, &self.kactive);
+        let mut next_rng = move || -> [u64; W] {
+            if ri == RNG_CHUNK {
+                let n = RNG_CHUNK.min(left);
+                squeeze_lanes(kst, kused, kactive, &mut rng[..n], n);
+                left -= n;
+                ri = 0;
+            }
+            ri += 1;
+            rng[ri - 1]
+        };
         let q = &mut self.q;
         let b = &mut self.b;
         let phase = &mut self.phase;
@@ -456,14 +520,14 @@ impl Lanes {
                     q[op.q1 as usize] = c1; q[op.qt as usize] = t;
                 }
                 K_HMR => {
-                    let r = self.rng[ri]; ri += 1;
+                    let r = next_rng();
                     let t = q[op.qt as usize];
                     let bb = &mut b[op.cb as usize];
                     for w in 0..W { bb[w] &= !cond[w]; bb[w] ^= r[w] & cond[w]; phase[w] ^= t[w] & r[w] & cond[w]; }
                     let t = &mut q[op.qt as usize]; for w in 0..W { t[w] &= !cond[w]; }
                 }
                 K_R => {
-                    let r = self.rng[ri]; ri += 1;
+                    let r = next_rng();
                     let t = &mut q[op.qt as usize];
                     for w in 0..W { phase[w] ^= t[w] & r[w] & cond[w]; t[w] &= !cond[w]; }
                 }
@@ -479,7 +543,6 @@ impl Lanes {
                 _ => unreachable!(),
             }
         }
-        debug_assert_eq!(ri, self.rng.len());
     }
 }
 
@@ -513,19 +576,15 @@ impl Fixed8 {
 }
 
 /// One nonce in a lane: its stream (positioned after the inputs and the batches already run) and its inputs.
-struct Slot { nonce: u64, xof: sha3::Shake256Reader, ks: Vec<(U256, U256)>, next_k: usize, batch: usize,
+struct Slot { nonce: u64, st: [u64; 25], used: usize, ks: Vec<(U256, U256)>, next_k: usize, batch: usize,
               shots: Vec<((U256, U256), (U256, U256), (U256, U256))> }
 
-fn open_slot(prefix: &Shake256, tail: &[Op], nonce: u64) -> Slot {
-    let mut xof = seed_for_nonce(prefix, tail, nonce);
-    let mut ks = Vec::with_capacity(NUM_TESTS);
-    for _ in 0..NUM_TESTS {
-        let mut rb = [[0u8; 32]; 2];
-        XofReader::read(&mut xof, &mut rb[0]);
-        XofReader::read(&mut xof, &mut rb[1]);
-        ks.push((U256::from_le_bytes(rb[0]), U256::from_le_bytes(rb[1])));
-    }
-    Slot { nonce, xof, ks, next_k: 0, batch: 0, shots: Vec::new() }
+fn open_slot(prefix: &MyShake, tail: &[Op], nonce: u64) -> Slot {
+    let (mut st, mut used) = my_seed(prefix, tail, nonce);
+    let mut words = vec![0u64; NUM_TESTS * 8];
+    squeeze_words(&mut st, &mut used, &mut words);
+    let ks = words.chunks_exact(8).map(|c| (U256::from_limbs([c[0], c[1], c[2], c[3]]), U256::from_limbs([c[4], c[5], c[6], c[7]]))).collect();
+    Slot { nonce, st, used, ks, next_k: 0, batch: 0, shots: Vec::new() }
 }
 
 /// Next batch of up to 64 valid shots (run_tests' skip rules), in order.
@@ -557,7 +616,7 @@ fn get_lane_reg(store: &[[u64; W]], ids: &[usize], w: usize, shot: usize) -> U25
 }
 
 /// Fast early-stop search on one thread. Returns (nonces finished, batches simulated, clean nonces, first-failing-batch histogram).
-fn fast_search_thread(cops: &[COp], n_rng: usize, nq: usize, nb: usize, regs: &[Vec<QubitOrBit>], prefix: &Shake256, tail: &[Op],
+fn fast_search_thread(cops: &[COp], n_rng: usize, nq: usize, nb: usize, regs: &[Vec<QubitOrBit>], prefix: &MyShake, tail: &[Op],
                       curve: &WeierstrassEllipticCurve, fx: &Fixed8, next: &AtomicU64, end: u64, t_rng: &AtomicU64,
                       t_pts: &AtomicU64, t_sim: &AtomicU64, log: Option<&std::sync::Mutex<Vec<(u64, usize, bool)>>>)
                       -> (usize, usize, Vec<(u64, f64)>, Vec<usize>) {
@@ -569,7 +628,6 @@ fn fast_search_thread(cops: &[COp], n_rng: usize, nq: usize, nb: usize, regs: &[
     let (mut finished, mut batches) = (0usize, 0usize);
     let mut clean = Vec::new();
     let mut hist = vec![0usize; 142];
-    let mut buf = vec![0u8; n_rng * 8];
     loop {
         let mut any = false;
         let t0 = Instant::now();
@@ -585,8 +643,8 @@ fn fast_search_thread(cops: &[COp], n_rng: usize, nq: usize, nb: usize, regs: &[
                 let tp0 = Instant::now();
                 fill_batch(s, curve, fx);
                 tp += tp0.elapsed().as_secs_f64();
-                XofReader::read(&mut s.xof, &mut buf);
-                for (k, ch) in buf.chunks_exact(8).enumerate() { lanes.rng[k][w] = u64::from_le_bytes(ch.try_into().unwrap()); }
+                for i in 0..25 { lanes.kst[i][w] = s.st[i]; }
+                lanes.kused[w] = s.used;
                 for (shot, (t, o, _)) in s.shots.iter().enumerate() {
                     set_lane_reg(&mut lanes.q, &rx, t.0, w, shot);
                     set_lane_reg(&mut lanes.q, &ry, t.1, w, shot);
@@ -596,12 +654,14 @@ fn fast_search_thread(cops: &[COp], n_rng: usize, nq: usize, nb: usize, regs: &[
             }
         }
         if !any { break; }
+        for w in 0..W { lanes.kactive[w] = slots[w].is_some(); }
         let prep = t0.elapsed().as_secs_f64();
         t_pts.fetch_add((tp * 1e6) as u64, AtOrd::Relaxed);
         t_rng.fetch_add(((prep - tp) * 1e6) as u64, AtOrd::Relaxed);
         let t1 = Instant::now();
         lanes.pass(cops);
         t_sim.fetch_add((t1.elapsed().as_secs_f64() * 1e6) as u64, AtOrd::Relaxed);
+        for w in 0..W { if let Some(s) = slots[w].as_mut() { for i in 0..25 { s.st[i] = lanes.kst[i][w]; } s.used = lanes.kused[w]; } }
         for w in 0..W {
             let Some(s) = slots[w].as_mut() else { continue };
             batches += 1;
@@ -630,4 +690,441 @@ fn fast_search_thread(cops: &[COp], n_rng: usize, nq: usize, nb: usize, regs: &[
         }
     }
     (finished, batches, clean, hist)
+}
+
+// ─── own SHAKE256 (Keccak-f[1600]), so the random bits of W draws can be squeezed together with SIMD ─────────
+const KRC: [u64; 24] = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000, 0x000000000000808b, 0x0000000080000001,
+    0x8000000080008081, 0x8000000000008009, 0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+    0x000000008000808b, 0x800000000000008b, 0x8000000000008089, 0x8000000000008003, 0x8000000000008002, 0x8000000000000080,
+    0x000000000000800a, 0x800000008000000a, 0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008];
+const KROT: [u32; 24] = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44];
+const KPI: [usize; 24] = [10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1];
+const RATE_W: usize = 17; // SHAKE256 rate = 136 bytes
+
+fn keccak_f(st: &mut [u64; 25]) {
+    for round in 0..24 {
+        let mut bc = [0u64; 5];
+        for i in 0..5 { bc[i] = st[i] ^ st[i + 5] ^ st[i + 10] ^ st[i + 15] ^ st[i + 20]; }
+        for i in 0..5 { let t = bc[(i + 4) % 5] ^ bc[(i + 1) % 5].rotate_left(1); for j in 0..5 { st[5 * j + i] ^= t; } }
+        let mut t = st[1];
+        for i in 0..24 { let j = KPI[i]; let tmp = st[j]; st[j] = t.rotate_left(KROT[i]); t = tmp; }
+        for j in 0..5 {
+            let b = [st[5 * j], st[5 * j + 1], st[5 * j + 2], st[5 * j + 3], st[5 * j + 4]];
+            for i in 0..5 { st[5 * j + i] = b[i] ^ (!b[(i + 1) % 5] & b[(i + 2) % 5]); }
+        }
+        st[0] ^= KRC[round];
+    }
+}
+
+/// W Keccak states side by side (lane-major), permuted together.
+fn keccak_f_w(st: &mut [[u64; W]; 25]) {
+    for round in 0..24 {
+        let mut bc = [[0u64; W]; 5];
+        for i in 0..5 { for w in 0..W { bc[i][w] = st[i][w] ^ st[i + 5][w] ^ st[i + 10][w] ^ st[i + 15][w] ^ st[i + 20][w]; } }
+        for i in 0..5 {
+            let mut t = [0u64; W];
+            for w in 0..W { t[w] = bc[(i + 4) % 5][w] ^ bc[(i + 1) % 5][w].rotate_left(1); }
+            for j in 0..5 { for w in 0..W { st[5 * j + i][w] ^= t[w]; } }
+        }
+        let mut t = st[1];
+        for i in 0..24 {
+            let j = KPI[i];
+            let tmp = st[j];
+            for w in 0..W { st[j][w] = t[w].rotate_left(KROT[i]); }
+            t = tmp;
+        }
+        for j in 0..5 {
+            let b = [st[5 * j], st[5 * j + 1], st[5 * j + 2], st[5 * j + 3], st[5 * j + 4]];
+            for i in 0..5 { for w in 0..W { st[5 * j + i][w] = b[i][w] ^ (!b[(i + 1) % 5][w] & b[(i + 2) % 5][w]); } }
+        }
+        for w in 0..W { st[0][w] ^= KRC[round]; }
+    }
+}
+
+#[derive(Clone)]
+struct MyShake { st: [u64; 25], buf: [u8; 136], pos: usize }
+impl MyShake {
+    fn new() -> Self { MyShake { st: [0; 25], buf: [0; 136], pos: 0 } }
+    fn absorb_block(&mut self) {
+        for i in 0..RATE_W { self.st[i] ^= u64::from_le_bytes(self.buf[8 * i..8 * i + 8].try_into().unwrap()); }
+        keccak_f(&mut self.st);
+        self.pos = 0;
+    }
+    fn update(&mut self, mut data: &[u8]) {
+        while !data.is_empty() {
+            let n = (136 - self.pos).min(data.len());
+            self.buf[self.pos..self.pos + n].copy_from_slice(&data[..n]);
+            self.pos += n;
+            data = &data[n..];
+            if self.pos == 136 { self.absorb_block(); }
+        }
+    }
+    /// Pad and permute: the state now holds the first output block; returns (state, words of it already used = 0).
+    fn finalize(mut self) -> ([u64; 25], usize) {
+        for b in &mut self.buf[self.pos..] { *b = 0; }
+        self.buf[self.pos] ^= 0x1F;
+        self.buf[135] ^= 0x80;
+        self.absorb_block();
+        (self.st, 0)
+    }
+}
+
+/// Scalar squeeze of n words from (state, used).
+fn squeeze_words(st: &mut [u64; 25], used: &mut usize, out: &mut [u64]) {
+    for o in out.iter_mut() {
+        if *used == RATE_W { keccak_f(st); *used = 0; }
+        *o = st[*used];
+        *used += 1;
+    }
+}
+
+fn my_absorb_op(h: &mut MyShake, op: &Op) {
+    let mut b = [0u8; 49];
+    b[0] = op.kind as u8;
+    b[1..9].copy_from_slice(&op.q_control2.0.to_le_bytes());
+    b[9..17].copy_from_slice(&op.q_control1.0.to_le_bytes());
+    b[17..25].copy_from_slice(&op.q_target.0.to_le_bytes());
+    b[25..33].copy_from_slice(&op.c_target.0.to_le_bytes());
+    b[33..41].copy_from_slice(&op.c_condition.0.to_le_bytes());
+    b[41..49].copy_from_slice(&op.r_target.0.to_le_bytes());
+    h.update(&b);
+}
+
+fn my_prefix(ops: &[Op]) -> MyShake {
+    let mut h = MyShake::new();
+    h.update(b"quantum_ecc-fiat-shamir-v2");
+    h.update(&(ops.len() as u64).to_le_bytes());
+    for op in &ops[..ops.len() - 96] { my_absorb_op(&mut h, op); }
+    h
+}
+
+fn my_seed(prefix: &MyShake, tail: &[Op], nonce: u64) -> ([u64; 25], usize) {
+    let mut h = prefix.clone();
+    for b in 0..48 {
+        let t = QubitId((nonce >> b) & 1);
+        for k in 0..2 { let mut op = tail[2 * b + k].clone(); op.q_target = t; my_absorb_op(&mut h, &op); }
+    }
+    h.finalize()
+}
+
+/// Squeeze n words for each of the W lanes in `active` into out[k][w], permuting all lanes together.
+fn squeeze_lanes(st: &mut [[u64; W]; 25], used: &mut [usize; W], active: &[bool; W], out: &mut [[u64; W]], n: usize) {
+    let mut got = [0usize; W];
+    loop {
+        // drain what is left of each lane's current block
+        let mut need = false;
+        for w in 0..W {
+            if !active[w] { continue; }
+            while used[w] < RATE_W && got[w] < n { out[got[w]][w] = st[used[w]][w]; used[w] += 1; got[w] += 1; }
+            if got[w] < n { need = true; }
+        }
+        if !need { break; }
+        // permute; lanes that are done keep their state (inactive lanes do not matter)
+        let some_done = (0..W).any(|w| active[w] && got[w] >= n);
+        let saved = if some_done { Some(*st) } else { None };
+        keccak_f_lanes(st);
+        for w in 0..W {
+            if active[w] && got[w] < n { used[w] = 0; }
+            else if let Some(sv) = &saved { for i in 0..25 { st[i][w] = sv[i][w]; } }
+        }
+    }
+}
+
+// generated (tools/nonce_search): fully unrolled Keccak-f[1600] on W lanes; elementwise ops vectorize
+#[inline(always)] fn vx(a: [u64; W], b: [u64; W]) -> [u64; W] { let mut o = [0u64; W]; for w in 0..W { o[w] = a[w] ^ b[w]; } o }
+#[inline(always)] fn vchi(a: [u64; W], b: [u64; W], c: [u64; W]) -> [u64; W] { let mut o = [0u64; W]; for w in 0..W { o[w] = a[w] ^ (!b[w] & c[w]); } o }
+#[inline(always)] fn vrol<const N: u32>(a: [u64; W]) -> [u64; W] { let mut o = [0u64; W]; for w in 0..W { o[w] = a[w].rotate_left(N); } o }
+#[inline(never)] fn keccak_f_wu(st: &mut [[u64; W]; 25]) {
+    let mut a00 = st[0];
+    let mut a01 = st[5];
+    let mut a02 = st[10];
+    let mut a03 = st[15];
+    let mut a04 = st[20];
+    let mut a10 = st[1];
+    let mut a11 = st[6];
+    let mut a12 = st[11];
+    let mut a13 = st[16];
+    let mut a14 = st[21];
+    let mut a20 = st[2];
+    let mut a21 = st[7];
+    let mut a22 = st[12];
+    let mut a23 = st[17];
+    let mut a24 = st[22];
+    let mut a30 = st[3];
+    let mut a31 = st[8];
+    let mut a32 = st[13];
+    let mut a33 = st[18];
+    let mut a34 = st[23];
+    let mut a40 = st[4];
+    let mut a41 = st[9];
+    let mut a42 = st[14];
+    let mut a43 = st[19];
+    let mut a44 = st[24];
+    for round in 0..24 {
+        let c0 = vx(vx(vx(a00, a01), vx(a02, a03)), a04);
+        let c1 = vx(vx(vx(a10, a11), vx(a12, a13)), a14);
+        let c2 = vx(vx(vx(a20, a21), vx(a22, a23)), a24);
+        let c3 = vx(vx(vx(a30, a31), vx(a32, a33)), a34);
+        let c4 = vx(vx(vx(a40, a41), vx(a42, a43)), a44);
+        let d0 = vx(c4, vrol::<1>(c1));
+        let d1 = vx(c0, vrol::<1>(c2));
+        let d2 = vx(c1, vrol::<1>(c3));
+        let d3 = vx(c2, vrol::<1>(c4));
+        let d4 = vx(c3, vrol::<1>(c0));
+        a00 = vx(a00, d0);
+        a01 = vx(a01, d0);
+        a02 = vx(a02, d0);
+        a03 = vx(a03, d0);
+        a04 = vx(a04, d0);
+        a10 = vx(a10, d1);
+        a11 = vx(a11, d1);
+        a12 = vx(a12, d1);
+        a13 = vx(a13, d1);
+        a14 = vx(a14, d1);
+        a20 = vx(a20, d2);
+        a21 = vx(a21, d2);
+        a22 = vx(a22, d2);
+        a23 = vx(a23, d2);
+        a24 = vx(a24, d2);
+        a30 = vx(a30, d3);
+        a31 = vx(a31, d3);
+        a32 = vx(a32, d3);
+        a33 = vx(a33, d3);
+        a34 = vx(a34, d3);
+        a40 = vx(a40, d4);
+        a41 = vx(a41, d4);
+        a42 = vx(a42, d4);
+        a43 = vx(a43, d4);
+        a44 = vx(a44, d4);
+        let b00 = a00;
+        let b01 = vrol::<28>(a30);
+        let b02 = vrol::<1>(a10);
+        let b03 = vrol::<27>(a40);
+        let b04 = vrol::<62>(a20);
+        let b10 = vrol::<44>(a11);
+        let b11 = vrol::<20>(a41);
+        let b12 = vrol::<6>(a21);
+        let b13 = vrol::<36>(a01);
+        let b14 = vrol::<55>(a31);
+        let b20 = vrol::<43>(a22);
+        let b21 = vrol::<3>(a02);
+        let b22 = vrol::<25>(a32);
+        let b23 = vrol::<10>(a12);
+        let b24 = vrol::<39>(a42);
+        let b30 = vrol::<21>(a33);
+        let b31 = vrol::<45>(a13);
+        let b32 = vrol::<8>(a43);
+        let b33 = vrol::<15>(a23);
+        let b34 = vrol::<41>(a03);
+        let b40 = vrol::<14>(a44);
+        let b41 = vrol::<61>(a24);
+        let b42 = vrol::<18>(a04);
+        let b43 = vrol::<56>(a34);
+        let b44 = vrol::<2>(a14);
+        a00 = vchi(b00, b10, b20);
+        a01 = vchi(b01, b11, b21);
+        a02 = vchi(b02, b12, b22);
+        a03 = vchi(b03, b13, b23);
+        a04 = vchi(b04, b14, b24);
+        a10 = vchi(b10, b20, b30);
+        a11 = vchi(b11, b21, b31);
+        a12 = vchi(b12, b22, b32);
+        a13 = vchi(b13, b23, b33);
+        a14 = vchi(b14, b24, b34);
+        a20 = vchi(b20, b30, b40);
+        a21 = vchi(b21, b31, b41);
+        a22 = vchi(b22, b32, b42);
+        a23 = vchi(b23, b33, b43);
+        a24 = vchi(b24, b34, b44);
+        a30 = vchi(b30, b40, b00);
+        a31 = vchi(b31, b41, b01);
+        a32 = vchi(b32, b42, b02);
+        a33 = vchi(b33, b43, b03);
+        a34 = vchi(b34, b44, b04);
+        a40 = vchi(b40, b00, b10);
+        a41 = vchi(b41, b01, b11);
+        a42 = vchi(b42, b02, b12);
+        a43 = vchi(b43, b03, b13);
+        a44 = vchi(b44, b04, b14);
+        for w in 0..W { a00[w] ^= KRC[round]; }
+    }
+    st[0] = a00;
+    st[5] = a01;
+    st[10] = a02;
+    st[15] = a03;
+    st[20] = a04;
+    st[1] = a10;
+    st[6] = a11;
+    st[11] = a12;
+    st[16] = a13;
+    st[21] = a14;
+    st[2] = a20;
+    st[7] = a21;
+    st[12] = a22;
+    st[17] = a23;
+    st[22] = a24;
+    st[3] = a30;
+    st[8] = a31;
+    st[13] = a32;
+    st[18] = a33;
+    st[23] = a34;
+    st[4] = a40;
+    st[9] = a41;
+    st[14] = a42;
+    st[19] = a43;
+    st[24] = a44;
+}
+
+// generated: Keccak-f[1600] on 8 states with AVX-512 (vprolq, vpternlogq); W must be 8
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn keccak_f_avx512(st: &mut [[u64; W]; 25]) {
+    use std::arch::x86_64::*;
+    let mut a00 = _mm512_loadu_si512(st[0].as_ptr() as *const _);
+    let mut a01 = _mm512_loadu_si512(st[5].as_ptr() as *const _);
+    let mut a02 = _mm512_loadu_si512(st[10].as_ptr() as *const _);
+    let mut a03 = _mm512_loadu_si512(st[15].as_ptr() as *const _);
+    let mut a04 = _mm512_loadu_si512(st[20].as_ptr() as *const _);
+    let mut a10 = _mm512_loadu_si512(st[1].as_ptr() as *const _);
+    let mut a11 = _mm512_loadu_si512(st[6].as_ptr() as *const _);
+    let mut a12 = _mm512_loadu_si512(st[11].as_ptr() as *const _);
+    let mut a13 = _mm512_loadu_si512(st[16].as_ptr() as *const _);
+    let mut a14 = _mm512_loadu_si512(st[21].as_ptr() as *const _);
+    let mut a20 = _mm512_loadu_si512(st[2].as_ptr() as *const _);
+    let mut a21 = _mm512_loadu_si512(st[7].as_ptr() as *const _);
+    let mut a22 = _mm512_loadu_si512(st[12].as_ptr() as *const _);
+    let mut a23 = _mm512_loadu_si512(st[17].as_ptr() as *const _);
+    let mut a24 = _mm512_loadu_si512(st[22].as_ptr() as *const _);
+    let mut a30 = _mm512_loadu_si512(st[3].as_ptr() as *const _);
+    let mut a31 = _mm512_loadu_si512(st[8].as_ptr() as *const _);
+    let mut a32 = _mm512_loadu_si512(st[13].as_ptr() as *const _);
+    let mut a33 = _mm512_loadu_si512(st[18].as_ptr() as *const _);
+    let mut a34 = _mm512_loadu_si512(st[23].as_ptr() as *const _);
+    let mut a40 = _mm512_loadu_si512(st[4].as_ptr() as *const _);
+    let mut a41 = _mm512_loadu_si512(st[9].as_ptr() as *const _);
+    let mut a42 = _mm512_loadu_si512(st[14].as_ptr() as *const _);
+    let mut a43 = _mm512_loadu_si512(st[19].as_ptr() as *const _);
+    let mut a44 = _mm512_loadu_si512(st[24].as_ptr() as *const _);
+    for round in 0..24 {
+        let c0 = _mm512_xor_si512(_mm512_ternarylogic_epi64::<0x96>(a00, a01, a02), _mm512_xor_si512(a03, a04));
+        let c1 = _mm512_xor_si512(_mm512_ternarylogic_epi64::<0x96>(a10, a11, a12), _mm512_xor_si512(a13, a14));
+        let c2 = _mm512_xor_si512(_mm512_ternarylogic_epi64::<0x96>(a20, a21, a22), _mm512_xor_si512(a23, a24));
+        let c3 = _mm512_xor_si512(_mm512_ternarylogic_epi64::<0x96>(a30, a31, a32), _mm512_xor_si512(a33, a34));
+        let c4 = _mm512_xor_si512(_mm512_ternarylogic_epi64::<0x96>(a40, a41, a42), _mm512_xor_si512(a43, a44));
+        let d0 = _mm512_xor_si512(c4, _mm512_rol_epi64::<1>(c1));
+        let d1 = _mm512_xor_si512(c0, _mm512_rol_epi64::<1>(c2));
+        let d2 = _mm512_xor_si512(c1, _mm512_rol_epi64::<1>(c3));
+        let d3 = _mm512_xor_si512(c2, _mm512_rol_epi64::<1>(c4));
+        let d4 = _mm512_xor_si512(c3, _mm512_rol_epi64::<1>(c0));
+        a00 = _mm512_xor_si512(a00, d0);
+        a01 = _mm512_xor_si512(a01, d0);
+        a02 = _mm512_xor_si512(a02, d0);
+        a03 = _mm512_xor_si512(a03, d0);
+        a04 = _mm512_xor_si512(a04, d0);
+        a10 = _mm512_xor_si512(a10, d1);
+        a11 = _mm512_xor_si512(a11, d1);
+        a12 = _mm512_xor_si512(a12, d1);
+        a13 = _mm512_xor_si512(a13, d1);
+        a14 = _mm512_xor_si512(a14, d1);
+        a20 = _mm512_xor_si512(a20, d2);
+        a21 = _mm512_xor_si512(a21, d2);
+        a22 = _mm512_xor_si512(a22, d2);
+        a23 = _mm512_xor_si512(a23, d2);
+        a24 = _mm512_xor_si512(a24, d2);
+        a30 = _mm512_xor_si512(a30, d3);
+        a31 = _mm512_xor_si512(a31, d3);
+        a32 = _mm512_xor_si512(a32, d3);
+        a33 = _mm512_xor_si512(a33, d3);
+        a34 = _mm512_xor_si512(a34, d3);
+        a40 = _mm512_xor_si512(a40, d4);
+        a41 = _mm512_xor_si512(a41, d4);
+        a42 = _mm512_xor_si512(a42, d4);
+        a43 = _mm512_xor_si512(a43, d4);
+        a44 = _mm512_xor_si512(a44, d4);
+        let b00 = a00;
+        let b01 = _mm512_rol_epi64::<28>(a30);
+        let b02 = _mm512_rol_epi64::<1>(a10);
+        let b03 = _mm512_rol_epi64::<27>(a40);
+        let b04 = _mm512_rol_epi64::<62>(a20);
+        let b10 = _mm512_rol_epi64::<44>(a11);
+        let b11 = _mm512_rol_epi64::<20>(a41);
+        let b12 = _mm512_rol_epi64::<6>(a21);
+        let b13 = _mm512_rol_epi64::<36>(a01);
+        let b14 = _mm512_rol_epi64::<55>(a31);
+        let b20 = _mm512_rol_epi64::<43>(a22);
+        let b21 = _mm512_rol_epi64::<3>(a02);
+        let b22 = _mm512_rol_epi64::<25>(a32);
+        let b23 = _mm512_rol_epi64::<10>(a12);
+        let b24 = _mm512_rol_epi64::<39>(a42);
+        let b30 = _mm512_rol_epi64::<21>(a33);
+        let b31 = _mm512_rol_epi64::<45>(a13);
+        let b32 = _mm512_rol_epi64::<8>(a43);
+        let b33 = _mm512_rol_epi64::<15>(a23);
+        let b34 = _mm512_rol_epi64::<41>(a03);
+        let b40 = _mm512_rol_epi64::<14>(a44);
+        let b41 = _mm512_rol_epi64::<61>(a24);
+        let b42 = _mm512_rol_epi64::<18>(a04);
+        let b43 = _mm512_rol_epi64::<56>(a34);
+        let b44 = _mm512_rol_epi64::<2>(a14);
+        a00 = _mm512_ternarylogic_epi64::<0xD2>(b00, b10, b20);
+        a01 = _mm512_ternarylogic_epi64::<0xD2>(b01, b11, b21);
+        a02 = _mm512_ternarylogic_epi64::<0xD2>(b02, b12, b22);
+        a03 = _mm512_ternarylogic_epi64::<0xD2>(b03, b13, b23);
+        a04 = _mm512_ternarylogic_epi64::<0xD2>(b04, b14, b24);
+        a10 = _mm512_ternarylogic_epi64::<0xD2>(b10, b20, b30);
+        a11 = _mm512_ternarylogic_epi64::<0xD2>(b11, b21, b31);
+        a12 = _mm512_ternarylogic_epi64::<0xD2>(b12, b22, b32);
+        a13 = _mm512_ternarylogic_epi64::<0xD2>(b13, b23, b33);
+        a14 = _mm512_ternarylogic_epi64::<0xD2>(b14, b24, b34);
+        a20 = _mm512_ternarylogic_epi64::<0xD2>(b20, b30, b40);
+        a21 = _mm512_ternarylogic_epi64::<0xD2>(b21, b31, b41);
+        a22 = _mm512_ternarylogic_epi64::<0xD2>(b22, b32, b42);
+        a23 = _mm512_ternarylogic_epi64::<0xD2>(b23, b33, b43);
+        a24 = _mm512_ternarylogic_epi64::<0xD2>(b24, b34, b44);
+        a30 = _mm512_ternarylogic_epi64::<0xD2>(b30, b40, b00);
+        a31 = _mm512_ternarylogic_epi64::<0xD2>(b31, b41, b01);
+        a32 = _mm512_ternarylogic_epi64::<0xD2>(b32, b42, b02);
+        a33 = _mm512_ternarylogic_epi64::<0xD2>(b33, b43, b03);
+        a34 = _mm512_ternarylogic_epi64::<0xD2>(b34, b44, b04);
+        a40 = _mm512_ternarylogic_epi64::<0xD2>(b40, b00, b10);
+        a41 = _mm512_ternarylogic_epi64::<0xD2>(b41, b01, b11);
+        a42 = _mm512_ternarylogic_epi64::<0xD2>(b42, b02, b12);
+        a43 = _mm512_ternarylogic_epi64::<0xD2>(b43, b03, b13);
+        a44 = _mm512_ternarylogic_epi64::<0xD2>(b44, b04, b14);
+        a00 = _mm512_xor_si512(a00, _mm512_set1_epi64(KRC[round] as i64));
+    }
+    _mm512_storeu_si512(st[0].as_mut_ptr() as *mut _, a00);
+    _mm512_storeu_si512(st[5].as_mut_ptr() as *mut _, a01);
+    _mm512_storeu_si512(st[10].as_mut_ptr() as *mut _, a02);
+    _mm512_storeu_si512(st[15].as_mut_ptr() as *mut _, a03);
+    _mm512_storeu_si512(st[20].as_mut_ptr() as *mut _, a04);
+    _mm512_storeu_si512(st[1].as_mut_ptr() as *mut _, a10);
+    _mm512_storeu_si512(st[6].as_mut_ptr() as *mut _, a11);
+    _mm512_storeu_si512(st[11].as_mut_ptr() as *mut _, a12);
+    _mm512_storeu_si512(st[16].as_mut_ptr() as *mut _, a13);
+    _mm512_storeu_si512(st[21].as_mut_ptr() as *mut _, a14);
+    _mm512_storeu_si512(st[2].as_mut_ptr() as *mut _, a20);
+    _mm512_storeu_si512(st[7].as_mut_ptr() as *mut _, a21);
+    _mm512_storeu_si512(st[12].as_mut_ptr() as *mut _, a22);
+    _mm512_storeu_si512(st[17].as_mut_ptr() as *mut _, a23);
+    _mm512_storeu_si512(st[22].as_mut_ptr() as *mut _, a24);
+    _mm512_storeu_si512(st[3].as_mut_ptr() as *mut _, a30);
+    _mm512_storeu_si512(st[8].as_mut_ptr() as *mut _, a31);
+    _mm512_storeu_si512(st[13].as_mut_ptr() as *mut _, a32);
+    _mm512_storeu_si512(st[18].as_mut_ptr() as *mut _, a33);
+    _mm512_storeu_si512(st[23].as_mut_ptr() as *mut _, a34);
+    _mm512_storeu_si512(st[4].as_mut_ptr() as *mut _, a40);
+    _mm512_storeu_si512(st[9].as_mut_ptr() as *mut _, a41);
+    _mm512_storeu_si512(st[14].as_mut_ptr() as *mut _, a42);
+    _mm512_storeu_si512(st[19].as_mut_ptr() as *mut _, a43);
+    _mm512_storeu_si512(st[24].as_mut_ptr() as *mut _, a44);
+}
+
+fn keccak_f_lanes(st: &mut [[u64; W]; 25]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if W == 8 && std::is_x86_feature_detected!("avx512f") { unsafe { keccak_f_avx512(st) }; return; }
+    }
+    keccak_f_wu(st);
 }

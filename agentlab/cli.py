@@ -39,7 +39,22 @@ from .config import Config
 from .ledger import Ledger
 
 
+def ensure_git_identity() -> None:
+    """The audit cherry-picks experiment commits and adoption commits the module; git refuses both without a
+    committer identity, and a fresh container has none. Fall back to agentlab's own when git has no identity set."""
+    import os
+    import subprocess
+    if all(os.environ.get(k) for k in ("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")):
+        return
+    have = subprocess.run(["git", "config", "user.email"], capture_output=True, text=True).stdout.strip()
+    if not have:
+        for k, v in (("GIT_AUTHOR_NAME", "agentlab"), ("GIT_AUTHOR_EMAIL", "agentlab@localhost"),
+                     ("GIT_COMMITTER_NAME", "agentlab"), ("GIT_COMMITTER_EMAIL", "agentlab@localhost")):
+            os.environ.setdefault(k, v)
+
+
 def main(argv: list[str] | None = None) -> int:
+    ensure_git_identity()
     ap = argparse.ArgumentParser(prog="agentlab", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", type=Path, default=None)
     sub = ap.add_subparsers(dest="cmd", required=True)

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from pathlib import Path
 
@@ -60,9 +61,12 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
     _sh(["git", "worktree", "add", "-q", "-b", f"agentlab/audit{exp_id}", str(clean), upstream], adapter.root)
     commits = _sh(["git", "rev-list", "--reverse", f"{exp['base_commit']}..HEAD"], wt).stdout.split()
     if commits:
-        cp = _sh(["git", "cherry-pick", "-x", *commits], clean)
+        # --keep-redundant-commits: a continue/combine run carries commits the base may already hold (an adopted
+        # parent); those apply as no-ops instead of stopping the cherry-pick.
+        cp = _sh(["git", "cherry-pick", "-x", "--keep-redundant-commits", *commits], clean)
         verdict["checks"]["applies_on_upstream_head"] = cp.returncode == 0
         if cp.returncode != 0:
+            _sh(["git", "cherry-pick", "--abort"], clean)
             verdict["fail"] = "does not apply cleanly on upstream head: " + cp.stderr[-500:]
             ledger.finish_experiment(exp_id, "rejected", details=verdict)
             return verdict
@@ -121,3 +125,21 @@ def audit(cfg: Config, adapter: CompetitionAdapter, ledger: Ledger, exp_id: int)
             verdict["adopted"] = adopted
             ledger.finish_experiment(exp_id, "adopted" if adopted.startswith("adopted") else "audited", details=verdict)
     return verdict
+
+
+# Audit failures caused by our own setup, not by the circuit: such an experiment deserves a second audit.
+SETUP_FAILURES = ("Please tell me who you are", "Committer identity unknown", "unable to auto-detect email address",
+                  "dubious ownership")
+
+
+def setup_failed(ledger: Ledger) -> list:
+    """Rejected experiments whose audit stopped on a setup problem (e.g. git had no identity), best fast gain first."""
+    out = []
+    for e in ledger.experiments(limit=100000, status="rejected"):
+        try:
+            fail = (json.loads(e["details"] or "{}") or {}).get("fail") or ""
+        except (TypeError, ValueError):
+            continue
+        if any(s in fail for s in SETUP_FAILURES):
+            out.append(e)
+    return sorted(out, key=lambda e: -(e["gain"] or 0.0))

@@ -85,7 +85,9 @@ The first start builds `work/cleanroom/harness`, a git repository with only the 
 module (no leaderboard history), and measures our base. Every run starts from that base; an audited
 gain (unit tests, official run, fresh-input error <= 1e-4, strictly better than the base) becomes the new
 base automatically and is committed to `cleanroom/point_add` here. Nothing from this track is submitted.
-`agentlab status` inside the container shows our base and how far it is from the target.
+`agentlab status` inside the container shows our base and how far it is from the target. An audit that
+stopped on our own setup rather than on the circuit (for example git without an identity) is re-run
+automatically when the loop starts, best gain first, before any new run is launched.
 
 ## Setup (Linux or macOS, without Docker)
 

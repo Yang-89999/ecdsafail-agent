@@ -24,7 +24,8 @@ from pathlib import Path
 from .ecdsafail import SCRIPTS, EcdsaFailAdapter
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-GIT_ID = ["-c", "user.name=agentlab", "-c", "user.email=agentlab@localhost"]
+# identity for our commits; safe.directory because the agent repo is a bind mount owned by the Mac user
+GIT_ID = ["-c", "user.name=agentlab", "-c", "user.email=agentlab@localhost", "-c", "safe.directory=*"]
 
 
 def _git(cwd: Path, *args: str, check: bool = False) -> subprocess.CompletedProcess:

@@ -150,6 +150,7 @@ def run_rounds(cfg: Config, rounds: int, solvers: int | None = None, audit_thres
     ledger.db.commit()
     if stale:
         print(f"marked {stale} interrupted experiment(s) as abandoned", flush=True)
+    _reaudit_setup_failures(cfg, adapter, ledger)
     planner.seed_ideas(ledger, adapter.kind)
     rng = random.Random()
     solvers = solvers or cfg.solvers
@@ -298,7 +299,8 @@ def fast_baseline(cfg, adapter, commit: str) -> int | None:
 def _decide_and_launch(cfg, adapter, ledger, rng, pool, running, finished_since, free, base_ref, best, state) -> None:
     hdr = f"=== decision  launched {state['launched']}  finished {state['finished']}" \
           + (f"  elapsed {_fmt(time.time() - state['t0'])}" if state.get("deadline") else "")
-    print(f"\n{hdr}  public best {best['score'] if best else '?'}  free slots {free}  running {[r['exp_id'] for r in running.values()] or 'none'} ===", flush=True)
+    label = "our base" if adapter.kind == "cleanroom" else "public best"
+    print(f"\n{hdr}  {label} {best['score'] if best else '?'}  free slots {free}  running {[r['exp_id'] for r in running.values()] or 'none'} ===", flush=True)
     seen = list(finished_since)
     finished_since.clear()
     d = coordinator.decide(cfg, adapter, ledger, list(running.values()), seen, free, best, rng)
@@ -366,19 +368,36 @@ def _on_finished(cfg, adapter, ledger, fut: Future, r: dict, audit_threshold, st
         print(f"  [lessons] failed: {ex}", flush=True)
     if e["status"] == "scored" and e["gain"] is not None and e["gain"] > audit_threshold:
         print(f"  -> beats the bar on the fast score; auditing #{exp_id} (full official run)", flush=True)
-        try:
-            v = auditor.audit(cfg, adapter, ledger, exp_id)
-            print(f"  audit #{exp_id}: {'OK' if 'fail' not in v else v['fail']} full={v.get('full', {}).get('score')} beats_best={v.get('beats_best')}", flush=True)
-            if v.get("adopted"):
-                print(f"  *** exp #{exp_id} beats our base: {v['adopted']} ***", flush=True)
-            elif v.get("beats_best"):
-                print(f"  *** exp #{exp_id} beats the public bar; waiting for `agentlab approve {exp_id} --by Yang` ***", flush=True)
-        except Exception as ex:  # noqa: BLE001
-            print(f"  audit #{exp_id} crashed: {ex}", flush=True)
+        _audit_and_report(cfg, adapter, ledger, exp_id)
     # retire ideas that keep failing
     for i in ledger.ideas("open"):
         if i.tries >= 4 and i.gain_sum / i.tries < -0.5:
             ledger.set_idea_status(i.id, "exhausted")
+
+
+def _audit_and_report(cfg, adapter, ledger, exp_id: int) -> None:
+    try:
+        v = auditor.audit(cfg, adapter, ledger, exp_id)
+        print(f"  audit #{exp_id}: {'OK' if 'fail' not in v else v['fail']} full={v.get('full', {}).get('score')} beats_best={v.get('beats_best')}", flush=True)
+        if v.get("adopted"):
+            print(f"  *** exp #{exp_id} beats our base: {v['adopted']} ***", flush=True)
+        elif v.get("beats_best"):
+            print(f"  *** exp #{exp_id} beats the public bar; waiting for `agentlab approve {exp_id} --by Yang` ***", flush=True)
+    except Exception as ex:  # noqa: BLE001
+        print(f"  audit #{exp_id} crashed: {ex}", flush=True)
+        traceback.print_exc()
+
+
+def _reaudit_setup_failures(cfg, adapter, ledger) -> None:
+    """Experiments whose audit stopped on our setup (not on the circuit) get a second audit before anything is
+    launched, best first, each on the newest base, so an adopted gain is the base every new run starts from."""
+    todo = auditor.setup_failed(ledger)
+    if todo:
+        print(f"re-auditing {len(todo)} experiment(s) whose audit failed on our setup, not on the circuit: "
+              f"{[e['id'] for e in todo]}", flush=True)
+    for e in todo:
+        print(f"  -> re-auditing #{e['id']} (fast gain {e['gain']:+.4f})", flush=True)
+        _audit_and_report(cfg, adapter, ledger, e["id"])
 
 
 def _close_unit(cfg: Config, ledger: Ledger, state: dict, running: dict | None = None, best=None) -> None:

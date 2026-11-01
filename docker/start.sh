@@ -13,6 +13,9 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd -P)"
 docker build -q -t agentlab -f "$here/docker/Dockerfile" "$here" >/dev/null
+# The clean-room track commits each adopted gain to cleanroom/point_add in this checkout, so a later `git pull`
+# meets local commits; rebasing them on top keeps the pull a one-liner (the updates never touch that folder).
+git -C "$here" config pull.rebase true 2>/dev/null || true
 docker rm -f agentlab-long >/dev/null 2>&1 || true
 env_args=(); mem=6g; track=""
 if [[ "${1:-}" == "--cleanroom" ]]; then

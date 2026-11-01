@@ -12,6 +12,7 @@
 //   nonce_search crn     <start> <count> [threads]   full test of CRN draws (inputs from a fixed salt, not the op
 //                                                    stream): two circuits compared on identical inputs (reference path)
 //   nonce_search crnfast <start> <count> [threads]   the same on the multi-lane fast path; last line JSON (win_score.sh)
+//   nonce_search export [job.bin]                    job file for tools/gpu_search (GPU search and CRN scoring)
 //
 // ops.bin is read from the working directory (any nonce in its tail).
 
@@ -302,7 +303,7 @@ fn main() {
     let (total_qubits, num_bits, _num_regs, regs) = analyze_ops(ops.iter());
     let t0 = Instant::now();
     // the Fiat-Shamir prefix is only needed for nonce-derived draws (crn draws come from a salt)
-    let prefix = if matches!(mode, "crn" | "crnfast" | "stats") { Shake256::default() } else { prefix_state(&ops) };
+    let prefix = if matches!(mode, "crn" | "crnfast" | "stats" | "export") { Shake256::default() } else { prefix_state(&ops) };
     let tail: Vec<Op> = ops[n - 96..].to_vec();
     eprintln!("loaded {} ops, {} qubits; prefix hashed in {:.1} s", n, total_qubits, t0.elapsed().as_secs_f64());
     match mode {
@@ -438,6 +439,7 @@ fn main() {
                 l.sort();
                 let mut bad = 0;
                 for (nonce, batch, ok) in &l {
+                    println!("nonce {nonce} passed_batches {} clean {ok}", batch + *ok as usize);
                     let o = test_nonce(&ops, &regs, total_qubits, num_bits, &curve, &fixed, seed_for_nonce(&prefix, &tail, *nonce), true);
                     let same = o.clean == *ok && (o.clean || o.batches_ok == *batch);
                     if !same { bad += 1; println!("MISMATCH nonce {nonce}: fast batch {batch} ok {ok}, reference batch {} clean {}", o.batches_ok, o.clean); }
@@ -511,6 +513,57 @@ fn main() {
                                                             d.shots, d.fail_shots, d.phase_shots)).collect();
             println!("{{\"draws\": {}, \"qubits\": {}, \"failing_batches_per_draw\": {fb:.4}, \"avg_tof\": {mt:.4}, \"seconds\": {secs:.1}, \
                       \"per_draw\": [{}]}}", r.len(), total_qubits, per.join(","));
+        }
+        "export" => {
+            // Job file for tools/gpu_search (GPU nonce search and CRN scoring): compiled ops, register ids, the
+            // Fiat-Shamir prefix sponge, the tail op bytes and the fixed-base table. Layout: gpu_search.cu load_job.
+            let path = args.get(2).cloned().unwrap_or_else(|| "job.bin".into());
+            let (cops, n_rng) = compile_ops(&ops);
+            let myp = my_prefix(&ops);
+            let fx = Fixed8::new(&curve, Fixed::new(&curve));
+            let (mut depth, mut max_depth) = (0usize, 0usize);
+            for c in &cops {
+                if c.k == K_PUSH { depth += 1; max_depth = max_depth.max(depth); } else if c.k == K_POP && depth > 0 { depth -= 1; }
+            }
+            assert!(regs.len() >= 4, "fewer than 4 registers");
+            let mut regids: Vec<Vec<u32>> = Vec::new();
+            for (ri, r) in regs.iter().enumerate().take(4) {
+                let ids: Vec<u32> = r.iter().map(|x| match x {
+                    QubitOrBit::Qubit(q) => { assert!(ri < 2, "register {ri} holds a qubit"); q.0 as u32 }
+                    QubitOrBit::Bit(b) => { assert!(ri >= 2, "register {ri} holds a bit"); b.0 as u32 }
+                }).collect();
+                assert_eq!(ids.len(), 256, "register {ri} is not 256 wide");
+                let mut s = ids.clone(); s.sort(); s.dedup();
+                assert_eq!(s.len(), 256, "register {ri} repeats an id");
+                regids.push(ids);
+            }
+            let mut reg_qubits: Vec<u32> = regs.iter().flat_map(|r| r.iter().filter_map(|x| match x {
+                QubitOrBit::Qubit(q) => Some(q.0 as u32), _ => None })).collect();
+            reg_qubits.sort(); reg_qubits.dedup();
+            let mut out: Vec<u8> = Vec::new();
+            fn w32(o: &mut Vec<u8>, v: u32) { o.extend_from_slice(&v.to_le_bytes()); }
+            out.extend_from_slice(b"AGNSJOB1");
+            for v in [total_qubits as u32, num_bits as u32, cops.len() as u32, n_rng as u32, NUM_TESTS as u32, max_depth as u32, n as u32] {
+                w32(&mut out, v);
+            }
+            for c in &cops {
+                out.push(c.k); out.push(c.c);
+                for v in [c.qt, c.q1, c.q2, c.cb, c.cc] { out.extend_from_slice(&v.to_le_bytes()); }
+            }
+            for r in &regids { for &v in r { w32(&mut out, v); } }
+            w32(&mut out, reg_qubits.len() as u32);
+            for &v in &reg_qubits { w32(&mut out, v); }
+            for v in myp.st { out.extend_from_slice(&v.to_le_bytes()); }
+            out.extend_from_slice(&myp.buf);
+            w32(&mut out, myp.pos as u32);
+            for op in &tail { out.extend_from_slice(&op_bytes(op)); }
+            for row in &fx.tab {
+                for (x, y) in row { for v in [x, y] { for l in v.as_limbs() { out.extend_from_slice(&l.to_le_bytes()); } } }
+            }
+            out.extend_from_slice(b"AGNSEND1");
+            std::fs::write(&path, &out).expect("write the job file");
+            println!("wrote {path}: {n} ops ({} compiled, {n_rng} rng reads per batch), {total_qubits} qubits, {num_bits} bits, \
+                      condition depth {max_depth}, {} bytes", cops.len(), out.len());
         }
         "stats" => {
             let mut counts = std::collections::BTreeMap::new();
@@ -966,6 +1019,19 @@ fn squeeze_words(st: &mut [u64; 25], used: &mut usize, out: &mut [u64]) {
         *o = st[*used];
         *used += 1;
     }
+}
+
+/// The 49 bytes the Fiat-Shamir hash absorbs for one op (as my_absorb_op).
+fn op_bytes(op: &Op) -> [u8; 49] {
+    let mut b = [0u8; 49];
+    b[0] = op.kind as u8;
+    b[1..9].copy_from_slice(&op.q_control2.0.to_le_bytes());
+    b[9..17].copy_from_slice(&op.q_control1.0.to_le_bytes());
+    b[17..25].copy_from_slice(&op.q_target.0.to_le_bytes());
+    b[25..33].copy_from_slice(&op.c_target.0.to_le_bytes());
+    b[33..41].copy_from_slice(&op.c_condition.0.to_le_bytes());
+    b[41..49].copy_from_slice(&op.r_target.0.to_le_bytes());
+    b
 }
 
 fn my_absorb_op(h: &mut MyShake, op: &Op) {

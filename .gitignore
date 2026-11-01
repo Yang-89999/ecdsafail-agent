@@ -12,3 +12,6 @@ tools/nonce_search/Cargo.toml
 tools/nonce_search/Cargo.lock
 tools/nonce_search/.agentlab-version
 tools/nonce_search/build-offline.log
+tools/gpu_search/gpu_search
+tools/gpu_search/gpu_search_cpu
+tools/gpu_search/*.build.log

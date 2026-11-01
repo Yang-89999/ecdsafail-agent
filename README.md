@@ -104,6 +104,9 @@ docker/start.sh --win           # same loop, on work/win/ (own ledger; lessons a
 
 Our base is the branch `agentlab/win-base` in the challenge repo (starts at the public head). A run that beats it
 on 24 draws is audited on 96 other draws and adopted, so gains stack (`work/win/candidates.md` lists them).
+
+The clean-draw search for a submission runs on GPUs (`tools/gpu_search`, checked against `nonce_search`): see
+`docs/gpu.md`. Benchmark on a rented GPU: `bash scripts/gpu_bench.sh`.
 Experiment branches are `agentlab/win-exp<N>`, so the earlier track's `agentlab/exp<N>` stay intact. Nothing is
 submitted from the loop: the base needs a nonce search for a clean official draw first, then Yang's approval.
 

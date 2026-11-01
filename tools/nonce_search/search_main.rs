@@ -979,7 +979,7 @@ fn squeeze_lanes(st: &mut [[u64; W]; 25], used: &mut [usize; W], active: &[bool;
 // generated: Keccak-f[1600] on 8 states with AVX-512 (vprolq, vpternlogq); W must be 8
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
-unsafe fn keccak_f_avx512(st: &mut [[u64; W]; 25]) {
+unsafe fn keccak_f_avx512(st: &mut [[u64; 8]; 25]) {
     use std::arch::x86_64::*;
     let mut a00 = _mm512_loadu_si512(st[0].as_ptr() as *const _);
     let mut a01 = _mm512_loadu_si512(st[5].as_ptr() as *const _);
@@ -1124,7 +1124,15 @@ unsafe fn keccak_f_avx512(st: &mut [[u64; W]; 25]) {
 fn keccak_f_lanes(st: &mut [[u64; W]; 25]) {
     #[cfg(target_arch = "x86_64")]
     {
-        if W == 8 && std::is_x86_feature_detected!("avx512f") { unsafe { keccak_f_avx512(st) }; return; }
+        if W % 8 == 0 && std::is_x86_feature_detected!("avx512f") {
+            for c in 0..W / 8 {
+                let mut part = [[0u64; 8]; 25];
+                for i in 0..25 { part[i].copy_from_slice(&st[i][8 * c..8 * c + 8]); }
+                unsafe { keccak_f_avx512(&mut part) };
+                for i in 0..25 { st[i][8 * c..8 * c + 8].copy_from_slice(&part[i]); }
+            }
+            return;
+        }
     }
     keccak_f_wu(st);
 }

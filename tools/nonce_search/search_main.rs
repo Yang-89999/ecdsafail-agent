@@ -417,6 +417,35 @@ fn main() {
                 println!("COMPARE {} nonces, {} mismatches", l.len(), bad);
             }
         }
+        "crn" => {
+            // common random numbers: draws seeded by a fixed salt, not by the op stream, so two circuits are tested
+            // on identical inputs. Prints one line per salt (failing batches, classical failures, avg Toffoli).
+            let start: u64 = args[2].parse().expect("start");
+            let count: u64 = args[3].parse().expect("count");
+            let threads: usize = args.get(4).and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+            let next = AtomicU64::new(start);
+            let res = std::sync::Mutex::new(Vec::new());
+            std::thread::scope(|s| {
+                for _ in 0..threads {
+                    s.spawn(|| loop {
+                        let salt = next.fetch_add(1, AtOrd::Relaxed);
+                        if salt >= start + count { break; }
+                        let mut h = Shake256::default();
+                        h.update(b"agentlab-crn-draw");
+                        h.update(&salt.to_le_bytes());
+                        let o = test_nonce(&ops, &regs, total_qubits, num_bits, &curve, &fixed, h.finalize_xof(), false);
+                        println!("crn {salt} failing_batches {} classical {} phase_batches {} avg_tof {:.3}", 141 - o.batches_total_ok, o.classical, o.phase_batches, o.avg_tof);
+                        res.lock().unwrap().push((141 - o.batches_total_ok, o.avg_tof));
+                    });
+                }
+            });
+            let r = res.into_inner().unwrap();
+            let k = r.len() as f64;
+            let fb = r.iter().map(|x| x.0 as f64).sum::<f64>() / k;
+            let mt = r.iter().map(|x| x.1).sum::<f64>() / k;
+            println!("CRN {} draws: failing batches/draw {fb:.3}, lambda {:.3}, avg Toffoli {mt:.3}", r.len(), -141.0 * (1.0 - fb / 141.0).ln());
+        }
         "stats" => {
             let mut counts = std::collections::BTreeMap::new();
             let (mut cond_ops, mut max_q, mut max_b) = (0usize, 0u64, 0u64);

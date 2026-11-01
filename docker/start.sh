@@ -43,5 +43,7 @@ if command -v caffeinate >/dev/null 2>&1 && ! pgrep -f "caffeinate -is" >/dev/nu
 fi
 echo "started: agentlab run ${args[*]}${track}   (container agentlab-long)"
 echo "follow with docker/logs.sh; status any time with: docker exec agentlab-long agentlab status"
-echo "the Coordinator's decisions: docker exec agentlab-long cat work/coordinator.md"
-echo "unit summaries (every 5 h in continuous mode) are in work/units/; stop with docker/stop.sh"
+echo "the Coordinator's decisions: docker exec agentlab-long agentlab coordinator"
+state="work"; [[ "$track" == *clean* ]] && state="work/cleanroom"; [[ "$track" == *win* ]] && state="work/win"
+[[ "$track" == *win* ]] && echo "adopted gains and our lead over the public head: docker exec agentlab-long cat work/win/candidates.md"
+echo "unit summaries (every 5 h in continuous mode) are in $state/units/; stop with docker/stop.sh"

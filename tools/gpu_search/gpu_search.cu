@@ -269,6 +269,7 @@ struct Dev {
     u32* acc; u64* tofacc;
     u64* next; u64* end;
     u32* outn; u64* out; u32 outcap;
+    int dump;                       // CPU only: print every failing shot (faildump mode)
 };
 
 HD u64 atomic_add64(u64* p, u64 v) {
@@ -540,6 +541,33 @@ HD void emit(const Dev& d, u32 l, u64 v1) {
     r[6] = a[A_SHOTS]; r[7] = a[A_FSHOTS]; r[8] = a[A_PSHOTS]; r[9] = a[A_FLAGS];
 }
 
+#ifndef __CUDA_ARCH__
+// faildump: one line per failing shot with its inputs, the circuit's outputs and the expected sum (hex, big-endian)
+static void dump_failures(const Dev& d, u32 l, u64 cl, u64 ph, u64 anc) {
+    const u32 L = d.L;
+    const u64* Ql = d.Q + l; const u64* El = d.E + l;
+    for (u32 s = 0; s < 64; s++) {
+        if (!(((cl | ph | anc) >> s) & 1)) continue;
+        Fe v[6];
+        points_shot(d, l, s, v);
+        Fe out[2] = {fe_small(0), fe_small(0)}, ex[2] = {fe_small(0), fe_small(0)};
+        for (int w = 0; w < 2; w++)
+            for (u32 i = 0; i < 256; i++) {
+                out[w].v[i >> 6] |= ((Ql[(size_t)d.reg[w * 256 + i] * L] >> s) & 1) << (i & 63);
+                ex[w].v[i >> 6] |= ((El[(size_t)(w * 256 + i) * L] >> s) & 1) << (i & 63);
+            }
+        char line[1200]; int n = 0;
+        n += snprintf(line + n, sizeof line - n, "FAIL %llu %u %u %d %d %d", (unsigned long long)d.id[l], d.batch[l], s,
+                      (int)((cl >> s) & 1), (int)((ph >> s) & 1), (int)((anc >> s) & 1));
+        const Fe* f[8] = {&v[0], &v[1], &v[2], &v[3], &out[0], &out[1], &ex[0], &ex[1]};
+        for (auto* x : f) n += snprintf(line + n, sizeof line - n, " %016llx%016llx%016llx%016llx", (unsigned long long)x->v[3],
+                                        (unsigned long long)x->v[2], (unsigned long long)x->v[1], (unsigned long long)x->v[0]);
+#pragma omp critical
+        { puts(line); }
+    }
+}
+#endif
+
 // end of a batch: the official checks (classical per shot, phase, ancilla after zeroing register qubits), then clear
 HD void finish_lane(const Dev& d, u32 l, const Ctx& c) {
     const u32 L = d.L;
@@ -552,7 +580,11 @@ HD void finish_lane(const Dev& d, u32 l, const Ctx& c) {
         cl |= Ql[(size_t)d.reg[256 + i] * L] ^ El[(size_t)(256 + i) * L];
     }
     u64 ph = c.phase, anc = 0;
-    for (u32 q = 0; q < d.nq; q++) { u64 v = Ql[(size_t)q * L]; if (!d.isreg[q]) anc |= v; Ql[(size_t)q * L] = 0; }
+    for (u32 q = 0; q < d.nq; q++) { u64 v = Ql[(size_t)q * L]; if (!d.isreg[q]) anc |= v; }
+#ifndef __CUDA_ARCH__
+    if (d.dump && (cl | ph | anc)) dump_failures(d, l, cl, ph, anc);
+#endif
+    for (u32 q = 0; q < d.nq; q++) Ql[(size_t)q * L] = 0;
     for (u32 b = 0; b < d.nb; b++) Bl[(size_t)b * L] = 0;
     bool ok = !cl && !ph && !anc;
     u32* a = d.acc + (size_t)l * NACC;
@@ -1052,6 +1084,88 @@ struct Runner {
         tm.io += now() - t4;
     }
 
+    // ── invariant mining (CPU, research): which wires are constant over passing shots at C checkpoints, and how
+    // early failing shots break one of those constants
+    struct Mine {
+        u32 C = 0, NR = 0;
+        std::vector<u32> cps;             // checkpoint op indices (state after that many ops)
+        std::vector<u64> Z, O;            // C x NR: some passing shot had a 1 / a 0 there
+        std::vector<u64> fhist, phist;    // earliest violated checkpoint (C = none) of failing / passing shots
+        u64 samples = 0;
+    };
+    void round_mine(Mine& m, bool eval) {
+        const Dev dd = d;
+        for (u32 l = 0; l < L; l++) seed_lane(dd, l);
+#pragma omp parallel for schedule(dynamic, 1)
+        for (u32 l = 0; l < L; l++) kwords_lane(dd, l);
+#pragma omp parallel for schedule(dynamic, 1)
+        for (u32 l = 0; l < L; l++) {
+            if (dd.state[l] != 1) continue;
+            Fe v[6][64];
+            for (u32 s = 0; s < 64; s++) {
+                Fe t[6];
+                if (points_shot(dd, l, s, t)) dd.acc[(size_t)l * NACC + A_FLAGS] |= 2;
+                for (int w = 0; w < 6; w++) v[w][s] = t[w];
+            }
+            for (int w = 0; w < 6; w++)
+                for (u32 i = 0; i < 256; i++) {
+                    u64 mm = 0;
+                    for (u32 s = 0; s < 64; s++) mm |= ((v[w][s].v[i >> 6] >> (i & 63)) & 1) << s;
+                    *plane(dd, l, w, i) = mm;
+                }
+        }
+        std::vector<u64> lZ, lO;
+        std::vector<u64> lf(m.C + 1, 0), lp(m.C + 1, 0);
+#pragma omp parallel for schedule(dynamic, 1)
+        for (u32 l = 0; l < L; l++) {
+            if (dd.state[l] != 1) continue;
+            const u32 NR = m.NR;
+            std::vector<u64> snap((size_t)m.C * NR);
+            Ctx c;
+            ctx_load(dd, l, c);
+            u32 at = 0;
+            for (u32 k = 0; k < m.C; k++) {
+                sim_ops(dd.Q + l, dd.B + l, L, dd.ops + at, m.cps[k] - at, c);
+                at = m.cps[k];
+                for (u32 r = 0; r < NR; r++) snap[(size_t)k * NR + r] = dd.Q[(size_t)r * L + l];  // Q then B rows: one buffer
+            }
+            sim_ops(dd.Q + l, dd.B + l, L, dd.ops + at, dd.ncops - at, c);
+            const u64* Ql = dd.Q + l; const u64* El = dd.E + l;
+            u64 cl = 0;
+            for (u32 i = 0; i < 256; i++) {
+                cl |= Ql[(size_t)dd.reg[i] * L] ^ El[(size_t)i * L];
+                cl |= Ql[(size_t)dd.reg[256 + i] * L] ^ El[(size_t)(256 + i) * L];
+            }
+            u64 anc = 0;
+            for (u32 q = 0; q < dd.nq; q++) if (!dd.isreg[q]) anc |= Ql[(size_t)q * L];
+            u64 fail = cl | c.phase | anc, pass = ~fail;
+            if (!eval) {
+#pragma omp critical
+                {
+                    for (size_t x = 0; x < snap.size(); x++) { m.Z[x] |= snap[x] & pass; m.O[x] |= ~snap[x] & pass; }
+                    m.samples += popc64(pass);
+                }
+            } else {
+                u64 seen = 0;
+                u32 first[64];
+                for (int s2 = 0; s2 < 64; s2++) first[s2] = m.C;
+                for (u32 k = 0; k < m.C && ~seen; k++) {
+                    u64 viol = 0;
+                    const u64* sn = &snap[(size_t)k * NR];
+                    const u64* z = &m.Z[(size_t)k * NR]; const u64* o = &m.O[(size_t)k * NR];
+                    for (u32 r = 0; r < NR; r++) viol |= (z[r] == 0 ? sn[r] : 0) | (o[r] == 0 ? ~sn[r] : 0);
+                    viol &= ~seen;
+                    for (int s2 = 0; s2 < 64; s2++) if ((viol >> s2) & 1) first[s2] = k;
+                    seen |= viol;
+                }
+#pragma omp critical
+                for (int s2 = 0; s2 < 64; s2++) { if ((fail >> s2) & 1) m.fhist[first[s2]]++; else m.phist[first[s2]]++; }
+            }
+            finish_lane(dd, l, c);
+        }
+        *d.outn = 0;
+    }
+
     // runs draws start..start+count; on_round(records so far, elapsed) after every round; stops early when it returns false
     std::vector<Rec> run(bool seed_nonce, bool early, u64 start, u64 count,
                          const std::function<bool(const std::vector<Rec>&, double)>& on_round) {
@@ -1364,6 +1478,53 @@ int main(int argc, char** argv) {
         if (mode == "bench" && cfgs.size() > 1)
             printf("BEST %s: %.1f nonces/s; at lambda %.2f: %.0f hours on this device per clean draw (90%% within %.0f hours)\n", best_name.c_str(),
                    best_rate, proj_lambda, std::exp(proj_lambda) / best_rate / 3600, std::exp(proj_lambda) / best_rate / 3600 * std::log(10.0));
+        return 0;
+    }
+    if (mode == "mine") {  // CPU research: mine wire constants on draws [a, a+n), test them on draws [b, b+n2)
+        if (gpu) { fprintf(stderr, "mine runs on the CPU (--cpu)\n"); return 1; }
+        u64 a = strtoull(pos.at(2).c_str(), 0, 10), n = strtoull(pos.at(3).c_str(), 0, 10);
+        u64 b = strtoull(pos.at(4).c_str(), 0, 10), n2 = strtoull(pos.at(5).c_str(), 0, 10);
+        u32 C = pos.size() > 6 ? (u32)atol(pos[6].c_str()) : 200;
+        Runner::Mine m;
+        m.C = C; m.NR = job.nq + job.nb;
+        for (u32 k = 1; k <= C; k++) m.cps.push_back((u32)((u64)job.ncops * k / (C + 1)));
+        m.Z.assign((size_t)C * m.NR, 0); m.O.assign((size_t)C * m.NR, 0);
+        m.fhist.assign(C + 1, 0); m.phist.assign(C + 1, 0);
+        for (int ph = 0; ph < 2; ph++) {
+            u64 st = ph ? b : a, cnt = ph ? n2 : n;
+            Runner R(job, false, (u32)std::min<u64>(lanes, cnt), block);
+            R.d.seed_nonce = 0; R.d.early = 0;
+            R.reset_lanes();
+            R.set64(R.d.next, st); R.set64(R.d.end, st + cnt);
+            double t0 = Runner::now();
+            for (u32 rr = 0; rr < 141 * ((cnt + R.L - 1) / R.L); rr++) R.round_mine(m, ph == 1);
+            fprintf(stderr, "%s phase: %llu draws in %.0f s\n", ph ? "eval" : "mine", (unsigned long long)cnt, Runner::now() - t0);
+            if (!ph) {
+                u64 zc = 0, oc = 0;
+                for (size_t x = 0; x < m.Z.size(); x++) { zc += m.Z[x] == 0; oc += m.O[x] == 0; }
+                printf("mined on %llu passing shots: %llu zero and %llu one constants over %u checkpoints x %u rows\n",
+                       (unsigned long long)m.samples, (unsigned long long)zc, (unsigned long long)oc, C, m.NR);
+            }
+        }
+        u64 F = 0, Pn = 0;
+        for (u32 k = 0; k <= C; k++) { F += m.fhist[k]; Pn += m.phist[k]; }
+        printf("eval: %llu failing shots, %llu passing shots\n", (unsigned long long)F, (unsigned long long)Pn);
+        u64 cf = 0, cp = 0;
+        for (u32 k = 0; k < C; k++) {
+            cf += m.fhist[k]; cp += m.phist[k];
+            if (m.fhist[k] || m.phist[k] || k % 20 == 19)
+                printf("checkpoint %3u (op %8u, %5.1f%%): failing shots caught so far %5.1f%%, passing shots flagged %.5f%%\n", k, m.cps[k],
+                       100.0 * m.cps[k] / job.ncops, 100.0 * cf / std::max<u64>(F, 1), 100.0 * cp / std::max<u64>(Pn, 1));
+        }
+        return 0;
+    }
+    if (mode == "faildump") {  // CPU, plain simulator: every failing shot of CRN draws start..start+count
+        if (gpu) { fprintf(stderr, "faildump runs on the CPU (--cpu)\n"); return 1; }
+        u64 start = strtoull(pos.at(2).c_str(), 0, 10), count = strtoull(pos.at(3).c_str(), 0, 10);
+        Runner R(job, false, std::min<u64>(lanes, count), block);
+        R.d.dump = 1;
+        auto r = R.run(false, false, start, count, quiet);
+        print_crn(job, r, 0, where.c_str());
         return 0;
     }
     if (mode == "selftest") {

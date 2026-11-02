@@ -13,6 +13,19 @@ staged through shared memory, so every state access is a coalesced row. The circ
 `nonce_search export` (compiled ops, register ids, the Fiat-Shamir prefix sponge, tail op bytes, fixed-base table), so
 parsing and hashing setup stay in the Rust tool built from the challenge's own evaluator.
 
+### Slot program (default on sm_80 and newer)
+
+Measured on an H100 (2026-11-02), the plain simulator spends about one GPU memory round trip on every gate: a lane alone
+takes ~300 cycles per gate, and with 135k lanes the GPU reaches ~1,000-1,200 nonces/s (about 1,000 H100-hours per clean
+draw at lambda 22). The gates mostly reuse a few rows (40% read the row the previous gate wrote), so the slot program
+keeps K rows of every lane in shared memory. Because all lanes run the same op stream, which rows to keep is decided
+once on the host with the whole future known (Belady: evict the row needed again furthest ahead, weighted by alpha
+towards rows idle the longest so loads can be issued earlier). The program adds LOAD (cp.async, not blocking),
+STORE and WAIT entries; WAIT goes before the first use of a slot whose load may still be in flight. Global traffic per
+gate drops from ~3 words to 0.79 (K=64), 0.59 (K=128). Options: `--kernel slots|plain`, `--slots K[:alpha[:block]],...`
+(default 64:2:128); `compile` prints the program's statistics. The slot program is checked record for record against
+the plain simulator (`selftest` compares with the plain CPU path).
+
 Modes: `search <start> <count>` (stops after the round that finds the first clean nonce), `check <nonce>` (full test
 of one nonce), `crn <start> <count>` (the same lines and JSON as `nonce_search crnfast`, so the GPU can score
 candidates too), `selftest`, `bench`.
@@ -24,7 +37,7 @@ The CUDA code compiles for sm_89 with no register spills in the simulator kernel
 checked on the GPU machine: `selftest` compares it with its own CPU path record by record, and `check` must find the
 head's official nonce clean.
 
-## Benchmark on a rented GPU (about 20 minutes)
+## Benchmark on a rented GPU (about 25 minutes)
 
 Rent one machine with an RTX 5090 (or any recent NVIDIA GPU), an image with CUDA 12.8 or newer including nvcc (for
 example `nvidia/cuda:12.8.1-devel-ubuntu24.04`, or a PyTorch image built for CUDA 12.8), at least 8 CPU cores and
@@ -35,11 +48,16 @@ example `nvidia/cuda:12.8.1-devel-ubuntu24.04`, or a PyTorch image built for CUD
     bash ecdsafail-agent/scripts/gpu_bench.sh
 
 It installs Rust if needed, builds the public head's op stream, runs the three checks (official nonce clean, GPU =
-CPU path, GPU = Rust reference on 64 nonces) and measures the search rate at four lane counts (2 minutes each). The
-output ends with lines like
+plain CPU simulator, GPU = Rust reference on 64 nonces) and measures the search rate of the plain simulator and of five
+slot-program settings (90 s each), logging GPU clocks and throttling. The output ends with lines like
 
     SEARCH ... nonces/s ...
     at lambda 22.04 (e^lambda = 3.731e+09 nonces per clean draw on average): H hours on this device per clean draw, N devices for a 12-hour average
+    BEST <setting>: R nonces/s; at lambda 22.04: H hours on this device per clean draw (90% within ... hours)
+
+First H100 measurement (plain simulator only, 2026-11-02): 457 / 671 / 941 / 1,228 nonces/s at 16,896 / 33,792 / 67,584 /
+135,168 lanes, all three checks passed; the rate fell 20-30% in the second minute of every setting (cause unknown: the
+clock log is there to tell).
 
 Everything it uses is public; nothing of ours leaves the Mac.
 

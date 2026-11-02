@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# GPU benchmark for the nonce search, for a freshly rented machine (e.g. one RTX 5090 for an hour). It builds the
+# GPU benchmark for the nonce search, for a freshly rented machine (e.g. one H100 for half an hour). It builds the
 # public head's op stream (commit 5ba2d2d, whose official TAIL_NONCE 12009835509 is known to be clean), checks the
-# GPU tester three ways, then measures the search rate at several lane counts. Nothing here is ours or secret: it
-# uses only the public challenge. Output also goes to ~/gpu-bench/bench.log.
+# GPU tester three ways, then measures the search rate of the plain simulator and of the slot program (rows cached in
+# shared memory) at several settings. Nothing here is ours or secret: it uses only the public challenge. Output also
+# goes to ~/gpu-bench/bench.log; GPU clocks, power and throttling are logged to ~/gpu-bench/smi.log.
 #
-#   bash scripts/gpu_bench.sh [seconds per lane setting, default 120]
+#   bash scripts/gpu_bench.sh [seconds per setting, default 90]
 #
 # Needs an NVIDIA GPU with CUDA 12.8+ (nvcc), git, curl, python3 and a C compiler; installs Rust if missing.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd -P)"
-secs="${1:-120}"
+secs="${1:-90}"
 work="${GPU_WORK:-$HOME/gpu-bench}"
 head_commit="5ba2d2d"
 head_full="5ba2d2d4e6fcee9f2f5786d02f26414dafaa53e3"
@@ -58,10 +59,15 @@ echo "-- gpu_search --"
 "$here/scripts/build_gpu_search.sh"
 gs="$here/tools/gpu_search/gpu_search"
 
+nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,power.draw,temperature.gpu,clocks_throttle_reasons.active --format=csv,noheader -l 5 \
+  > "$work/smi.log" 2>/dev/null &
+smi_pid=$!
+trap 'kill $smi_pid 2>/dev/null || true' EXIT
+
 echo "-- check 1: the head's official nonce must be clean on the GPU --"
 "$gs" "$work/head.job" check "$head_nonce" | tee "$work/check.txt"
 grep -q "clean=true" "$work/check.txt" || { echo "!! the official nonce did not come out clean: the GPU path is wrong; stop here"; exit 1; }
-echo "-- check 2: GPU against this program's CPU path (4 CRN draws, 64 early-stop nonces) --"
+echo "-- check 2: GPU against the plain simulator on the CPU (4 CRN draws, 64 early-stop nonces) --"
 "$gs" "$work/head.job" selftest 4 64 > "$work/selftest_full.txt" || true
 grep -v "^nonce \|^crn \|^{" "$work/selftest_full.txt" | tee "$work/selftest.txt"
 grep -q "SELFTEST OK" "$work/selftest.txt" || { echo "!! selftest failed; stop here"; exit 1; }
@@ -75,6 +81,21 @@ else
   echo "!! Rust reference and GPU differ (see $work/rust_nonces.txt vs $work/gpu_nonces.txt)"
 fi
 
-echo "-- benchmark: $secs s per lane setting --"
+echo "-- benchmark: $secs s per setting --"
 "$gs" "$work/head.job" bench "$secs" | tee "$work/bench.txt"
+kill $smi_pid 2>/dev/null || true
+echo "-- GPU clocks during the run (SM MHz min/max, power W max, temperature C max, throttle reasons seen) --"
+python3 - "$work/smi.log" <<'PY' || true
+import sys
+sm, pw, tp, th = [], [], [], set()
+for line in open(sys.argv[1]):
+    f = [x.strip() for x in line.split(",")]
+    if len(f) < 6: continue
+    try:
+        sm.append(float(f[1].split()[0])); pw.append(float(f[3].split()[0])); tp.append(float(f[4]))
+    except ValueError:
+        continue
+    th.add(f[5])
+if sm: print(f"SM clock {min(sm):.0f}-{max(sm):.0f} MHz, power max {max(pw):.0f} W, temperature max {max(tp):.0f} C, throttle reasons {sorted(th)}")
+PY
 echo "== done $(date -u +%FT%TZ); paste everything from the line 'GPU nonce-search benchmark' into the thread =="

@@ -12,6 +12,7 @@ here="$(cd "$(dirname "$0")/.." && pwd -P)"
 secs="${1:-120}"
 work="${GPU_WORK:-$HOME/gpu-bench}"
 head_commit="5ba2d2d"
+head_full="5ba2d2d4e6fcee9f2f5786d02f26414dafaa53e3"
 head_nonce="12009835509"
 mkdir -p "$work"
 exec > >(tee -a "$work/bench.log") 2>&1
@@ -38,9 +39,14 @@ fi
 
 echo "-- the public challenge at $head_commit --"
 ch="$work/ecdsafail-challenge"
-[[ -d "$ch/.git" ]] || git clone -q https://github.com/ecdsafail/ecdsafail-challenge.git "$ch"
-git -C "$ch" fetch -q origin || true
-git -C "$ch" checkout -q "$head_commit"
+# only this one commit (25 MB): a full clone carries thousands of submission branches
+if ! git -C "$ch" cat-file -e "$head_full^{commit}" 2>/dev/null; then
+  rm -rf "$ch"; mkdir -p "$ch"
+  git -C "$ch" init -q
+  git -C "$ch" remote add origin https://github.com/ecdsafail/ecdsafail-challenge.git
+  git -C "$ch" fetch -q --depth 1 origin "$head_full"
+fi
+git -C "$ch" checkout -q "$head_full"
 chan="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$ch/rust-toolchain")"
 rustup toolchain install "$chan" --profile minimal >/dev/null
 (cd "$ch" && RUSTUP_TOOLCHAIN="$chan" cargo fetch --locked -q)

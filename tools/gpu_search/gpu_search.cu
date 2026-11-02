@@ -783,7 +783,9 @@ static void print_crn(const Job& j, std::vector<Rec> r, double secs, const char*
     fflush(stdout);
 }
 
-struct SearchStats { u64 finished = 0, batches = 0, clean = 0, anomalies = 0; std::vector<u64> hist = std::vector<u64>(142, 0); };
+// lane_batches counts every batch run, including those of nonces still in flight when the run stops; counting only
+// finished nonces' batches leaves out the long-running ones and overstates the per-batch failure rate q
+struct SearchStats { u64 finished = 0, batches = 0, lane_batches = 0, clean = 0, anomalies = 0; std::vector<u64> hist = std::vector<u64>(142, 0); };
 static void add_search(SearchStats& s, const Rec& r) {
     s.finished++;
     u64 passed = r.v[1];
@@ -794,12 +796,13 @@ static void add_search(SearchStats& s, const Rec& r) {
     if (r.v[9] & 6) s.anomalies++;
 }
 static void print_search(const SearchStats& s, double secs, const char* where) {
-    double q = s.finished > s.clean ? (double)(s.finished - s.clean) / std::max<u64>(s.batches, 1) : 0;
+    u64 nb = std::max(s.lane_batches, s.batches);
+    double q = s.finished > s.clean ? (double)(s.finished - s.clean) / std::max<u64>(nb, 1) : 0;
     double pc = std::pow(1 - q, 141);
     double rate = s.finished / std::max(secs, 1e-9);
     printf("SEARCH %llu nonces in %.0f s on %s: %.1f nonces/s, %.1f batches/s, %.2f batches/nonce; q = %.4f; P(clean) = %.3e; "
            "expected nonces per clean draw %.3e; expected hours per clean draw on this device %.2f; clean found %llu%s\n",
-           (unsigned long long)s.finished, secs, where, rate, s.batches / std::max(secs, 1e-9), (double)s.batches / std::max<u64>(s.finished, 1),
+           (unsigned long long)s.finished, secs, where, rate, nb / std::max(secs, 1e-9), (double)nb / std::max<u64>(s.finished, 1),
            q, pc, 1 / pc, 1 / pc / rate / 3600, (unsigned long long)s.clean, s.anomalies ? " (some nonces had skipped input pairs: recheck them)" : "");
     fflush(stdout);
 }
@@ -914,6 +917,7 @@ int main(int argc, char** argv) {
             bool found = false;
             char w[160]; snprintf(w, sizeof w, "%s, %u lanes", where.c_str(), L);
             auto on = [&](const std::vector<Rec>& r, double el) {
+                st.lane_batches += L;  // every lane holds a nonce and runs one batch per round
                 for (; seen < r.size(); seen++) {
                     add_search(st, r[seen]);
                     if (r[seen].v[9] & 1) { printf("CLEAN nonce %llu\n", (unsigned long long)r[seen].v[0]); fflush(stdout); found = true; }

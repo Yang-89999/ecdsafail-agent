@@ -52,6 +52,7 @@ else
   rc=$?
 fi
 set -e
+grep -E "^rebind" "$scratch/build.log" || true
 tail -3 "$scratch/build.log"
 echo "build_circuit: exit $rc, $(( $(date +%s) - t0 ))s"
 if [[ $rc -ne 0 || ! -s "$scratch/ops.bin" ]]; then

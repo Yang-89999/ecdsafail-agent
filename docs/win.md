@@ -45,3 +45,19 @@ The base goes to the leaderboard only after: a nonce search on cloud CPU for a c
 core-hours at the head's error rate, roughly $1,000-2,500; Yang decides the spend), the official benchmark run on that
 nonce, `agentlab approve <exp> --by Yang`, and Yang's explicit go. Rules for the search: take the first clean draw,
 never choose draws by their Toffoli count, never submit a re-roll of the head.
+
+## When the public head adds a hash-bound final pass
+
+From 39b7cd5 the public head ends `apply_merged_policy` with `source_edits::run(ops, include_str!("disc50_followup.txt"))`:
+a table bound to the exact stream (length + SHA3-256) that inserts 17,335 ops at position 0 and turns 9 CCX into CX.
+Our adopted passes run after `apply_merged_policy` and some bind to positions, so a plain replay builds a stream that
+panics. win mode then keeps our base on the old head (`work/win/replay_failed.json`). To merge by hand, with win mode
+stopped:
+
+    docker/run.sh bash tools/merge_head/merge_head.sh
+
+It replays our commits onto the head, moves that final pass after our passes (`tools/merge_head/patch.py`), applies it
+with `rebind_edits` (each edit's site found by its old ops and 24 ops of context on each side, nearest to the expected
+position; an edit whose site our passes changed is skipped and reported), builds, and moves `agentlab/win-base` only if
+the build succeeds. Checked on f5f14f4: with no passes of ours the stream is byte-identical to the head's; with ops
+dropped and duplicated before the edit sites, all 18 edits still land.

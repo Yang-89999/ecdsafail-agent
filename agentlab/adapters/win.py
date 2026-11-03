@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -82,16 +83,77 @@ class EcdsaFailWinAdapter(EcdsaFailAdapter):
     def _short(self, ref: str) -> str:
         return _git(self.root, "rev-parse", "--short", ref).stdout.strip()
 
+    def _replay_state(self) -> dict:
+        p = self.work / "replay_failed.json"
+        try:
+            return json.loads(p.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _builds(self, wt: Path, label: str) -> tuple[bool, str]:
+        """Does the op stream build from this worktree (the generator runs to the end)?"""
+        out = self.work / "crn_ops" / f"check-{label}"
+        out.mkdir(parents=True, exist_ok=True)
+        try:
+            rc, txt = _run_logged(["bash", str(SCRIPTS / "build_ops.sh"), str(wt), str(out)], None,
+                                  self.work / "crn_ops" / f"check-{label}.log", self.cfg.solver_timeout_s,
+                                  f"build check of {label}")
+        finally:
+            (out / "ops.bin").unlink(missing_ok=True)
+        return rc == 0, txt
+
+    def _recover_broken_base(self) -> None:
+        """A base replayed onto a new public head before the build check existed may not build (a hash-bound edit
+        pass upstream, for example). Put the base back on the commit it was replayed from."""
+        base, up = self.cfg.win_base_branch, self.upstream_ref()
+        msg = _git(self.root, "log", "-1", "--format=%B", base).stdout
+        m = re.findall(r"\(cherry picked from commit ([0-9a-f]{40})\)", msg)
+        if not m or _git(self.root, "cat-file", "-e", m[-1] + "^{commit}").returncode != 0:
+            return
+        # a replay: the original commit sits on an older public head than the base does (an adoption does not)
+        fork = _git(self.root, "merge-base", base, up).stdout.strip()
+        if not fork or _git(self.root, "merge-base", "--is-ancestor", fork, m[-1]).returncode == 0:
+            return
+        st = self._replay_state()
+        key = _git(self.root, "rev-parse", base).stdout.strip()
+        if st.get("checked") == key:
+            return
+        tmp = Path(self.cfg.worktrees_dir) / "check-base"
+        _git(self.root, "worktree", "remove", "--force", str(tmp))
+        _git(self.root, "worktree", "add", "-q", "--detach", str(tmp), base)
+        try:
+            ok, txt = self._builds(tmp, self._short(base))
+        finally:
+            _git(self.root, "worktree", "remove", "--force", str(tmp))
+        if ok:
+            st["checked"] = key
+            (self.work / "replay_failed.json").write_text(json.dumps(st))
+            return
+        orig = m[-1]
+        _git(self.root, "branch", "-f", base, orig)
+        st.update(checked=key, up=_git(self.root, "rev-parse", up).stdout.strip(), base=orig, error=txt[-1500:])
+        (self.work / "replay_failed.json").write_text(json.dumps(st))
+        print(f"[win] our replayed base {key[:8]} does not build on the public head; put our base back on "
+              f"{orig[:8]} (resolve the merge by hand; error kept in work/win/replay_failed.json)", flush=True)
+
     def sync_base(self) -> str:
         """Create the base branch at the public head on first use; when the public head moves, replay our adopted
-        commits on top of it (kept as they are if they do not apply). Returns the base commit."""
+        commits on top of it, and move the base only if the replay applies AND builds (otherwise keep it where it is,
+        on the old head, and say so once). Returns the base commit."""
         base, up = self.cfg.win_base_branch, self.upstream_ref()
         if _git(self.root, "rev-parse", "--verify", "-q", base).returncode != 0:
             _git(self.root, "branch", base, up)
             print(f"[win] created our base {base} at the public head {self._short(up)}", flush=True)
-        elif _git(self.root, "merge-base", "--is-ancestor", up, base).returncode != 0:
+            return self._short(base)
+        self._recover_broken_base()
+        if _git(self.root, "merge-base", "--is-ancestor", up, base).returncode != 0:
             ours = _git(self.root, "rev-list", "--reverse", "--no-merges", f"{up}..{base}").stdout.split()
             old = self._short(base)
+            up_full = _git(self.root, "rev-parse", up).stdout.strip()
+            base_full = _git(self.root, "rev-parse", base).stdout.strip()
+            st = self._replay_state()
+            if st.get("up") == up_full and st.get("base") == base_full:
+                return old  # this replay was tried and failed; keep the base until resolved by hand
             if not ours:
                 _git(self.root, "branch", "-f", base, up)
             else:
@@ -99,13 +161,26 @@ class EcdsaFailWinAdapter(EcdsaFailAdapter):
                 _git(self.root, "worktree", "remove", "--force", str(tmp))
                 _git(self.root, "worktree", "add", "-q", "--detach", str(tmp), up)
                 cp = _git(tmp, "cherry-pick", "-x", "--keep-redundant-commits", *ours)
+                why = ""
                 if cp.returncode == 0:
-                    _git(self.root, "branch", "-f", base, _git(tmp, "rev-parse", "HEAD").stdout.strip())
+                    ok, txt = self._builds(tmp, "replay")
+                    if ok:
+                        new = _git(tmp, "rev-parse", "HEAD").stdout.strip()
+                        _git(self.root, "branch", "-f", base, new)
+                        st["checked"] = new
+                        (self.work / "replay_failed.json").write_text(json.dumps(st))
+                    else:
+                        why, err = "apply but the result does not build", txt[-1500:]
                 else:
                     _git(tmp, "cherry-pick", "--abort")
-                    print(f"[win] the public head moved to {self._short(up)} but our {len(ours)} adopted commit(s) do not "
-                          f"apply on it; keeping our base {old} (resolve by hand)", flush=True)
+                    why, err = "do not apply on it", (cp.stdout + cp.stderr)[-1500:]
                 _git(self.root, "worktree", "remove", "--force", str(tmp))
+                if why:
+                    st.update(up=up_full, base=base_full, error=err)
+                    (self.work / "replay_failed.json").write_text(json.dumps(st))
+                    print(f"[win] the public head moved to {self._short(up)} but our {len(ours)} adopted commit(s) {why}; "
+                          f"keeping our base {old} on the old head (gains are still measured against the new head; "
+                          f"resolve by hand; details in work/win/replay_failed.json)", flush=True)
             if self._short(base) != old:
                 print(f"[win] the public head moved: our base {old} -> {self._short(base)} (on {self._short(up)})", flush=True)
         return self._short(base)

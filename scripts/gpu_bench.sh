@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # GPU benchmark for the nonce search, for a freshly rented machine (e.g. one H100 for half an hour). It builds the
 # public head's op stream (commit 5ba2d2d, whose official TAIL_NONCE 12009835509 is known to be clean), checks the
-# GPU tester three ways, then measures the search rate of the plain simulator and of the slot program (rows cached in
-# shared memory) at several settings. Nothing here is ours or secret: it uses only the public challenge. Output also
-# goes to ~/gpu-bench/bench.log; GPU clocks, power and throttling are logged to ~/gpu-bench/smi.log.
+# GPU tester (exact simulator and fast classical filter) against the CPU and the Rust reference, then measures the
+# search rate of the exact plain simulator and of the fast filter variants, and tries one GPU profiler run. Nothing
+# here is ours or secret: it uses only the public challenge. Output also goes to ~/gpu-bench/bench.log; GPU clocks,
+# power and throttling are logged to ~/gpu-bench/smi.log.
 #
-#   bash scripts/gpu_bench.sh [seconds per setting, default 90]
+#   bash scripts/gpu_bench.sh [seconds per setting, default 60]
 #
 # Needs an NVIDIA GPU with CUDA 12.8+ (nvcc), git, curl, python3 and a C compiler; installs Rust if missing.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd -P)"
-secs="${1:-90}"
+secs="${1:-60}"
 work="${GPU_WORK:-$HOME/gpu-bench}"
 head_commit="5ba2d2d"
 head_full="5ba2d2d4e6fcee9f2f5786d02f26414dafaa53e3"
@@ -64,14 +65,22 @@ nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,power.draw,temperature.gpu
 smi_pid=$!
 trap 'kill $smi_pid 2>/dev/null || true' EXIT
 
-echo "-- check 1: the head's official nonce must be clean on the GPU --"
-"$gs" "$work/head.job" check "$head_nonce" | tee "$work/check.txt"
-grep -q "clean=true" "$work/check.txt" || { echo "!! the official nonce did not come out clean: the GPU path is wrong; stop here"; exit 1; }
-echo "-- check 2: GPU against the plain simulator on the CPU (4 CRN draws, 64 early-stop nonces) --"
-"$gs" "$work/head.job" selftest 4 64 > "$work/selftest_full.txt" || true
+echo "-- check 1: the head's official nonce, exact and through the classical filter (CPU) --"
+"$gs" "$work/head.job" check "$head_nonce" --cpu | tee "$work/check.txt"
+grep -q "clean=true" "$work/check.txt" || { echo "!! the official nonce did not come out clean: the simulator is wrong; stop here"; exit 1; }
+"$gs" "$work/head.job" check "$head_nonce" --cpu --kernel fast | tee "$work/check_filter.txt"
+grep -q "clean=true" "$work/check_filter.txt" || { echo "!! the classical filter rejects the official nonce; stop here"; exit 1; }
+echo "-- check 2: the exact GPU simulator against the plain simulator on the CPU (2 CRN draws, 64 early-stop nonces) --"
+"$gs" "$work/head.job" selftest 2 64 --kernel plain > "$work/selftest_full.txt" || true
 grep -v "^nonce \|^crn \|^{" "$work/selftest_full.txt" | tee "$work/selftest.txt"
 grep -q "SELFTEST OK" "$work/selftest.txt" || { echo "!! selftest failed; stop here"; exit 1; }
-echo "-- check 3: the GPU's 64 nonces against the Rust reference (nonce_search compare) --"
+for v in 0 3 5; do
+  echo "-- check 2.$v: fast filter variant $v on the GPU against the plain simulator on the filter stream (CPU) --"
+  "$gs" "$work/head.job" selftest 2 64 --kernel fast --fast "$v" > "$work/selftest_fast$v.txt" || true
+  grep -v "^nonce \|^crn \|^{" "$work/selftest_fast$v.txt" | grep -E "SELFTEST|MISMATCH|records" | tee -a "$work/selftest.txt"
+  grep -q "SELFTEST OK" "$work/selftest_fast$v.txt" || { echo "!! fast selftest failed; stop here"; exit 1; }
+done
+echo "-- check 3: the GPU's 64 nonces (exact) against the Rust reference (nonce_search compare) --"
 (cd "$work/head" && "$here/tools/nonce_search/target/release/nonce_search" compare 1000 64 > "$work/rust_compare.txt" 2>&1) || true
 grep "passed_batches" "$work/rust_compare.txt" | sort > "$work/rust_nonces.txt" || true
 grep "^nonce " "$work/selftest_full.txt" | sort > "$work/gpu_nonces.txt" || true
@@ -84,6 +93,17 @@ fi
 echo "-- benchmark: $secs s per setting --"
 "$gs" "$work/head.job" bench "$secs" | tee "$work/bench.txt"
 kill $smi_pid 2>/dev/null || true
+echo "-- profiler (optional): one launch of the fast simulator, variant 0 --"
+ncu_bin="$(command -v ncu || true)"; [[ -z "$ncu_bin" && -x /usr/local/cuda/bin/ncu ]] && ncu_bin=/usr/local/cuda/bin/ncu
+if [[ -n "$ncu_bin" ]]; then
+  timeout 300 "$ncu_bin" --kernel-name regex:k_fast --launch-count 1 --section SpeedOfLight --section Occupancy \
+    --section MemoryWorkloadAnalysis --section WarpStateStats --section SchedulerStats \
+    "$gs" "$work/head.job" search 2000000000000 100000000 --kernel fast --fast 0 --seconds 1 > "$work/ncu.txt" 2>&1 || true
+  grep -E "ERR_NVGPUCTRPERM|==ERROR==" "$work/ncu.txt" | head -3
+  grep -E "Throughput|Busy|Occupancy|Registers|Stall|Issued|Eligible|Hit Rate|Bandwidth|Duration|Active Warps" "$work/ncu.txt" | head -60 || true
+else
+  echo "ncu not found; skipped"
+fi
 echo "-- GPU clocks during the run (SM MHz min/max, power W max, temperature C max, throttle reasons seen) --"
 python3 - "$work/smi.log" <<'PY' || true
 import sys

@@ -10,8 +10,12 @@
 //                                              stops after the round that finds the first clean draw (--no-stop: go on)
 //   gpu_search <job> check <nonce>             full official test of one nonce
 //   gpu_search <job> selftest                  GPU against this binary's CPU path (CRN draws, early-stop nonces)
-//   gpu_search <job> bench [seconds]           search rate at several lane counts
-// options: --lanes N (draws in flight), --block N (threads per simulator block), --seconds S (search time limit),
+//   gpu_search <job> bench [seconds]           search rate of the exact plain simulator and the fast filter variants
+//   gpu_search <job> faildump <start> <count>  (CPU) every failing shot of CRN draws, with inputs and outputs
+// options: --kernel fast|plain|slots (search and bench default to fast: the classical filter on the fast simulator,
+//          every draw it passes then checked in full on the CPU; other modes default to plain, the exact simulator),
+//          --fast V[,V...]|all (fast simulator variants, see FVARS), --filter (plain simulator on the filter stream),
+//          --lanes N (draws in flight), --block N (threads per simulator block), --seconds S (search time limit),
 //          --lambda X (error rate for the cost projection, default 22.04),
 //          --cpu (use the CPU path in a GPU build), --threads N (CPU threads), --device N (GPU index)
 //
@@ -50,6 +54,16 @@ struct COp { u32 w0, w1, w2; };  // w0 = k | c << 8 | qt << 16; w1 = q1 | q2 << 
 // slot program (see compile_slots): the same ops on shared-memory slots, plus LOAD slot <- row, STORE slot -> row
 // (w0 = k | slot << 16, w1 = row: qubit q is row q, bit b is row nq + b) and WAIT (w1 = loads allowed in flight)
 enum { K_LOAD = 15, K_STORE = 16, K_WAIT = 17 };
+// classical filter (filter_ops): RST resets a qubit (an HMR or R with its measurement outcome taken as 0)
+enum { K_RST = 18 };
+// fast simulator of the filter stream (compile_fast): 16-byte entries {k, t, a, b} on rows (qubit q: row q, bit b:
+// row nq + b, then an all-ones row ONES standing in for an absent control). Almost every op is t ^= cond & a & b (CX,
+// CCX and X with ONES for absent controls; a reset RST is t ^= cond & t, which clears t): those come in runs, each
+// after a RUN entry {F_RUN, n} that never crosses a staging chunk; the rarer kinds stand alone. In the copy a Runner
+// uploads, t, a, b are word offsets row * L, so an address is one multiply-add.
+enum : u32 { F_RUN = 0, F_XOR, F_SWAP, F_B0, F_B1, F_BINV, F_PUSH, F_POP };
+struct alignas(16) FOp { u32 k, t, a, b; };
+static const int FMAXS = 4;       // condition depth of the fast simulator
 static const u32 WAITV[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 20, 24, 32};
 static const int MAXS = 8;        // condition stack depth (a shift register: no dynamic indexing, so it stays in registers)
 static const int NACC = 8;        // per-lane counters: failing, classical, phase_b, ancilla_b, shots, fail_shots, phase_shots, flags
@@ -269,6 +283,7 @@ struct Dev {
     u32* acc; u64* tofacc;
     u64* next; u64* end;
     u32* outn; u64* out; u32 outcap;
+    const FOp* fops; u32 nfops;     // fast filter simulator (null: not used)
     int dump;                       // CPU only: print every failing shot (faildump mode)
 };
 
@@ -428,6 +443,7 @@ HD void sim_ops(u64* __restrict__ Ql, u64* __restrict__ Bl, const u32 L, const C
             case K_BINV: Bl[cb * L] ^= cond; break;
             case K_B0: Bl[cb * L] &= ~cond; break;
             case K_B1: Bl[cb * L] |= cond; break;
+            case K_RST: Ql[qt * L] &= ~cond; break;
             case K_PUSH:
                 c.s7 = c.s6; c.s6 = c.s5; c.s5 = c.s4; c.s4 = c.s3; c.s3 = c.s2; c.s2 = c.s1; c.s1 = c.s0; c.s0 = c.base;
                 c.sp++; c.base &= Bl[cc * L]; break;
@@ -526,6 +542,76 @@ HD void sim_slots(u64* __restrict__ S, const u32 BS, u64* __restrict__ G, const 
 #undef SL
 }
 
+// ─── fast filter simulator ────────────────────────────────────────────────────────────────────────────────────
+// 97% of the filter stream is t ^= cond & a & b (CX, CCX, X with ONES for absent controls) or t &= ~cond (RST), so
+// both share one branch-free path: m = base & a & b, t ^= m & (t | X) with X = ~0 for XOR and 0 for a reset. There is
+// no Toffoli count, no phase and no randomness. A thread runs LPT adjacent lanes (on the GPU one 16-byte access serves
+// two lanes); a lane that is not active has base 0, so every op leaves its rows alone.
+template <int LPT> struct VW { u64 v[LPT]; };
+template <int LPT> HD VW<LPT> vld(const u64* p) {
+    VW<LPT> r;
+#ifdef __CUDA_ARCH__
+    if constexpr (LPT == 2) { ulonglong2 x = *reinterpret_cast<const ulonglong2*>(p); r.v[0] = x.x; r.v[1] = x.y; return r; }
+#endif
+    for (int i = 0; i < LPT; i++) r.v[i] = p[i];
+    return r;
+}
+template <int LPT> HD void vst(u64* p, const VW<LPT>& r) {
+#ifdef __CUDA_ARCH__
+    if constexpr (LPT == 2) { *reinterpret_cast<ulonglong2*>(p) = make_ulonglong2(r.v[0], r.v[1]); return; }
+#endif
+    for (int i = 0; i < LPT; i++) p[i] = r.v[i];
+}
+// base in registers; the condition stack (PUSH and POP are 0.5% of the ops) in a small per-thread array
+template <int LPT> struct FCtx { u64 base[LPT]; u64 stk[FMAXS * LPT]; u32 sp; bool over; };
+
+template <int LPT> HD void fast_slow(u64* __restrict__ R, const FOp o, FCtx<LPT>& c) {
+    u64* pt = R + o.t;
+    VW<LPT> t = vld<LPT>(pt);
+    switch (o.k) {
+        case F_SWAP: {
+            u64* pa = R + o.a;
+            VW<LPT> a = vld<LPT>(pa);
+            for (int j = 0; j < LPT; j++) { u64 x = (a.v[j] ^ t.v[j]) & c.base[j]; a.v[j] ^= x; t.v[j] ^= x; }
+            vst<LPT>(pa, a); vst<LPT>(pt, t);
+        } break;
+        case F_B0: for (int j = 0; j < LPT; j++) t.v[j] &= ~c.base[j]; vst<LPT>(pt, t); break;
+        case F_B1: for (int j = 0; j < LPT; j++) t.v[j] |= c.base[j]; vst<LPT>(pt, t); break;
+        case F_BINV: for (int j = 0; j < LPT; j++) t.v[j] ^= c.base[j]; vst<LPT>(pt, t); break;
+        case F_PUSH:
+            if (c.sp >= (u32)FMAXS) { c.over = true; break; }
+            for (int j = 0; j < LPT; j++) { c.stk[c.sp * LPT + j] = c.base[j]; c.base[j] &= t.v[j]; }
+            c.sp++; break;
+        case F_POP:
+            if (c.sp > 0) { c.sp--; for (int j = 0; j < LPT; j++) c.base[j] = c.stk[c.sp * LPT + j]; }
+            break;
+        default: break;
+    }
+}
+template <int LPT> HD void sim_fast(u64* __restrict__ R, const FOp* ops, u32 n, FCtx<LPT>& c) {
+    for (u32 i = 0; i < n;) {
+        const FOp h = ops[i++];
+        if (h.k == F_RUN) {
+            const u32 e = i + h.t;
+#ifdef __CUDA_ARCH__
+#pragma unroll 4
+#endif
+            for (; i < e; i++) {  // t ^= cond & a & b
+                const FOp o = ops[i];
+                u64* pt = R + o.t;
+                const VW<LPT> a = vld<LPT>(R + o.a), b = vld<LPT>(R + o.b);
+                VW<LPT> t = vld<LPT>(pt);
+                for (int j = 0; j < LPT; j++) t.v[j] ^= c.base[j] & a.v[j] & b.v[j];
+                vst<LPT>(pt, t);
+            }
+        } else fast_slow<LPT>(R, h, c);
+    }
+}
+template <int LPT> HD void fctx_init(FCtx<LPT>& c, const bool* active) {
+    c.sp = 0; c.over = false;
+    for (int j = 0; j < LPT; j++) c.base[j] = active[j] ? ~0ULL : 0ULL;
+}
+
 HD void ctx_load(const Dev& d, u32 l, Ctx& c) {
     c.phase = 0; c.tof = 0; c.base = ~0ULL; c.sp = 0;
     for (int i = 0; i < 25; i++) c.st[i] = d.rsp[(size_t)i * d.L + l];
@@ -569,17 +655,16 @@ static void dump_failures(const Dev& d, u32 l, u64 cl, u64 ph, u64 anc) {
 #endif
 
 // end of a batch: the official checks (classical per shot, phase, ancilla after zeroing register qubits), then clear
-HD void finish_lane(const Dev& d, u32 l, const Ctx& c) {
+// end of a batch: the official checks (classical per shot, phase, ancilla after zeroing register qubits), then clear
+HD void finish_checks(const Dev& d, u32 l, u64 phase, u64 tof, bool overflow) {
     const u32 L = d.L;
     u64* Ql = d.Q + l; u64* Bl = d.B + l; const u64* El = d.E + l;
-    d.rused[l] = c.used;
-    for (int i = 0; i < 25; i++) d.rsp[(size_t)i * L + l] = c.st[i];
     u64 cl = 0;
     for (u32 i = 0; i < 256; i++) {
         cl |= Ql[(size_t)d.reg[i] * L] ^ El[(size_t)i * L];
         cl |= Ql[(size_t)d.reg[256 + i] * L] ^ El[(size_t)(256 + i) * L];
     }
-    u64 ph = c.phase, anc = 0;
+    u64 ph = phase, anc = 0;
     for (u32 q = 0; q < d.nq; q++) { u64 v = Ql[(size_t)q * L]; if (!d.isreg[q]) anc |= v; }
 #ifndef __CUDA_ARCH__
     if (d.dump && (cl | ph | anc)) dump_failures(d, l, cl, ph, anc);
@@ -588,7 +673,7 @@ HD void finish_lane(const Dev& d, u32 l, const Ctx& c) {
     for (u32 b = 0; b < d.nb; b++) Bl[(size_t)b * L] = 0;
     bool ok = !cl && !ph && !anc;
     u32* a = d.acc + (size_t)l * NACC;
-    if (c.sp > MAXS) a[A_FLAGS] |= 4;  // condition stack overflow (export checks the depth; never expected)
+    if (overflow) a[A_FLAGS] |= 4;  // condition stack overflow (the host checks the depth; never expected)
     a[A_SHOTS] += 64;
     a[A_CLASS] += popc64(cl);
     a[A_FSHOTS] += popc64(cl | ph);
@@ -596,7 +681,7 @@ HD void finish_lane(const Dev& d, u32 l, const Ctx& c) {
     a[A_PHB] += ph != 0;
     a[A_ANCB] += anc != 0;
     a[A_FAIL] += !ok;
-    d.tofacc[l] += c.tof;
+    d.tofacc[l] += tof;
     u32 b = d.batch[l];
     bool last = b + 1 == d.ntests / 64;
     if (d.early) {
@@ -613,6 +698,18 @@ HD void finish_lane(const Dev& d, u32 l, const Ctx& c) {
         } else d.batch[l] = b + 1;
     }
 }
+HD void finish_lane(const Dev& d, u32 l, const Ctx& c) {
+    d.rused[l] = c.used;
+    for (int i = 0; i < 25; i++) d.rsp[(size_t)i * d.L + l] = c.st[i];
+    finish_checks(d, l, c.phase, c.tof, c.sp > MAXS);
+}
+
+static const u32 FCH = 256;  // fast entries staged per chunk (4 KB: shared memory left to the L1 cache)
+static const u32 FBS = 128;  // fast simulator threads per block
+// fast simulator variants (lanes per thread, minimum blocks per SM); variant 0 is the default
+struct FastVar { int lpt, minb; };
+static const FastVar FVARS[] = {{2, 8}, {1, 8}, {2, 12}, {1, 16}, {2, 6}, {2, 16}};
+static const int NFVARS = sizeof FVARS / sizeof FVARS[0];
 
 // ─── GPU kernels ─────────────────────────────────────────────────────────────────────────────────────────────
 #ifdef __CUDACC__
@@ -674,6 +771,37 @@ __global__ void k_slots(Dev d) {
     if (act) { slot_wait(0); finish_lane(d, l, c); }
 }
 static size_t slots_smem(u32 K, u32 block) { return (CH * sizeof(COp) + 7) / 8 * 8 + (size_t)K * block * 8; }
+// the fast filter simulator: FBS threads per block, LPT lanes per thread, at least MINB blocks per SM (which caps the
+// registers per thread, so more lanes are in flight to hide memory latency)
+template <int LPT, int MINB> __global__ void __launch_bounds__(FBS, MINB) k_fast(Dev d) {
+    __shared__ FOp sh[FCH];
+    const u32 l0 = (blockIdx.x * FBS + threadIdx.x) * LPT;
+    FCtx<LPT> c;
+    bool act[LPT], any = false;
+    for (int j = 0; j < LPT; j++) { act[j] = l0 + j < d.L && d.state[l0 + j] == 1; any |= act[j]; }
+    fctx_init<LPT>(c, act);
+    u64* R = d.Q + (l0 < d.L ? l0 : 0);
+    for (u32 b0 = 0; b0 < d.nfops; b0 += FCH) {
+        u32 n = min(FCH, d.nfops - b0);
+        __syncthreads();
+        for (u32 i = threadIdx.x; i < n; i += FBS) sh[i] = d.fops[b0 + i];
+        __syncthreads();
+        if (any) sim_fast<LPT>(R, sh, n, c);
+    }
+    for (int j = 0; j < LPT; j++)
+        if (act[j]) finish_checks(d, l0 + j, 0, 0, c.over || c.sp != 0);
+}
+typedef void (*FastKernel)(Dev);
+static FastKernel fast_kernel(int v) {
+    switch (v) {
+        case 0: return k_fast<2, 8>;
+        case 1: return k_fast<1, 8>;
+        case 2: return k_fast<2, 12>;
+        case 3: return k_fast<1, 16>;
+        case 4: return k_fast<2, 6>;
+        default: return k_fast<2, 16>;
+    }
+}
 
 #define CK(x) do { cudaError_t e_ = (x); if (e_ != cudaSuccess) { fprintf(stderr, "CUDA error %s at %s:%d\n", \
     cudaGetErrorString(e_), __FILE__, __LINE__); exit(2); } } while (0)
@@ -732,6 +860,110 @@ static Job load_job(const char* path) {
     if (j.maxdepth > (u32)MAXS) { fprintf(stderr, "condition depth %u > %d\n", j.maxdepth, MAXS); exit(1); }
     for (int i = 0; i < 1024; i++) if (j.reg[i] >= (i < 512 ? j.nq : j.nb)) { fprintf(stderr, "register id out of range\n"); exit(1); }
     return j;
+}
+
+// ─── classical filter: the op stream with every measurement outcome taken as 0 ───────────────────────────────────
+// A nonce search only has to find a draw with no failing shot. Most of the simulator's work that does not decide the
+// classical and ancilla checks can go: the phase ops (CZ, Z, CCZ, NEG, and the phase kickback of HMR and R) and the
+// random measurement outcomes, which cost one Keccak permutation per 17 outcomes. With every outcome taken as 0 an HMR
+// or R only resets its qubit, every block conditioned on an outcome is dead, and the classical input bits (ox, oy) are
+// the only bits that can be nonzero besides those the circuit sets itself. The filter's classical and ancilla verdict
+// equals the official one whenever those checks do not depend on the outcomes (public head, CRN draws 0-99: the same
+// 1,897 failing shots, see docs/gpu.md); a draw the filter passes is then checked in full with the official outcomes
+// and phase, so the filter only decides which draws are worth a full check.
+struct FilterStats { u64 in = 0, out = 0, phase = 0, dead = 0, rst = 0, bitops = 0, folded = 0; };
+static std::vector<COp> filter_ops(const Job& j, FilterStats& st) {
+    // Every bit row stays exact (a bit op is dropped only when it cannot change the row); what is known about each
+    // bit (0, 1 or unknown) folds the conditions: a block or op conditioned on a known 0 is dead, on a known 1 it
+    // runs unconditioned.
+    enum : u8 { BZ = 0, BO = 1, BU = 2 };
+    std::vector<u8> bv(j.nb, BZ);                             // rows start at 0 in every batch
+    for (int i = 512; i < 1024; i++) bv[j.reg[i]] = BU;       // the classical input point
+    std::vector<u8> stk;                                      // per open block: 0 dropped (condition 1), 1 emitted
+    u32 emitted = 0;                                          // emitted blocks open: the base condition is unknown
+    std::vector<COp> out;
+    out.reserve(j.ops.size());
+    int dead = 0;                                             // > 0: inside blocks whose condition is 0 (nesting)
+    for (const COp& o0 : j.ops) {
+        st.in++;
+        COp o = o0;
+        const u32 k = o.w0 & 0xFF, cb = o.w2 & 0xFFFF, cc = o.w2 >> 16;
+        if (dead) { if (k == K_PUSH) dead++; else if (k == K_POP) dead--; st.dead++; continue; }
+        if (k == K_PUSH) {                                    // (a PUSH carries its condition bit as a flag)
+            if (bv[cc] == BZ) { dead = 1; st.dead++; }
+            else if (bv[cc] == BO) { stk.push_back(0); st.folded++; }
+            else { stk.push_back(1); emitted++; out.push_back(o); }
+            continue;
+        }
+        if (k == K_POP) {
+            if (stk.empty()) continue;
+            if (stk.back()) { emitted--; out.push_back(o); } else st.folded++;
+            stk.pop_back();
+            continue;
+        }
+        bool fl = (o.w0 & 0xFF00) != 0;
+        if (fl && bv[cc] == BZ) { st.dead++; continue; }
+        if (fl && bv[cc] == BO) { o.w0 &= ~0xFF00u; fl = false; st.folded++; }
+        const bool ones = !emitted && !fl;                    // this op's condition is all ones in every shot
+        switch (k) {
+            case K_CZ: case K_Z: case K_CCZ: case K_NEG: st.phase++; continue;
+            case K_HMR: case K_B0: {                          // the bit becomes bit & ~cond (outcome 0)
+                if (k == K_HMR) { COp r = o; r.w0 = (o.w0 & ~0xFFu) | K_RST; out.push_back(r); st.rst++; }
+                if (bv[cb] == BZ) { st.folded++; continue; }
+                COp b = o; b.w0 = (o.w0 & 0xFF00) | K_B0; if (k == K_HMR) b.w1 = 0;
+                out.push_back(b); st.bitops++;
+                bv[cb] = ones ? BZ : BU;
+                continue;
+            }
+            case K_R: o.w0 = (o.w0 & ~0xFFu) | K_RST; st.rst++; break;
+            case K_B1:
+                if (bv[cb] == BO) { st.folded++; continue; }
+                bv[cb] = ones ? BO : BU; st.bitops++; break;
+            case K_BINV:
+                bv[cb] = (ones && bv[cb] != BU) ? (u8)(bv[cb] ^ 1) : BU; st.bitops++; break;
+            default: break;
+        }
+        out.push_back(o);
+    }
+    st.out = out.size();
+    return out;
+}
+
+// the filter stream as fast-simulator entries; fails (empty) on an op the fast simulator does not take
+static std::vector<FOp> compile_fast(const Job& j, std::string& err) {
+    const u32 nq = j.nq, ONES = j.nq + j.nb;
+    std::vector<FOp> f;
+    f.reserve(j.ops.size() + j.ops.size() / 64 + 16);
+    size_t run = SIZE_MAX;                                    // index of the open RUN entry
+    auto xop = [&](u32 t, u32 a, u32 b) {
+        if (run == SIZE_MAX || (f.size() % FCH) == 0) {       // open a run (a new chunk always starts with one)
+            if (f.size() % FCH == FCH - 1) f.push_back({F_RUN, 0, 0, 0});  // no room for an op after a header here
+            run = f.size(); f.push_back({F_RUN, 0, 0, 0});
+        }
+        f.push_back({F_XOR, t, a, b}); f[run].t++;
+    };
+    auto single = [&](u32 k, u32 t, u32 a) { run = SIZE_MAX; f.push_back({k, t, a, ONES}); };
+    u32 dep = 0, maxdep = 0;
+    for (const COp& o : j.ops) {
+        const u32 w0 = o.w0, w1 = o.w1, w2 = o.w2;
+        const u32 k = w0 & 0xFF, qt = w0 >> 16, q1 = w1 & 0xFFFF, q2 = w1 >> 16, cb = w2 & 0xFFFF, cc = w2 >> 16;
+        if ((w0 & 0xFF00) && k != K_PUSH) { err = "an op with its own condition bit"; return {}; }
+        switch (k) {
+            case K_CX: xop(qt, q1, ONES); break;
+            case K_CCX: xop(qt, q1, q2); break;
+            case K_X: xop(qt, ONES, ONES); break;
+            case K_RST: xop(qt, qt, ONES); break;             // t ^= cond & t clears t where cond is set
+            case K_SWAP: single(F_SWAP, qt, q1); break;
+            case K_B0: single(F_B0, nq + cb, ONES); break;
+            case K_B1: single(F_B1, nq + cb, ONES); break;
+            case K_BINV: single(F_BINV, nq + cb, ONES); break;
+            case K_PUSH: single(F_PUSH, nq + cc, ONES); maxdep = std::max(maxdep, ++dep); break;
+            case K_POP: single(F_POP, ONES, ONES); if (dep) dep--; break;
+            default: { char b[64]; snprintf(b, sizeof b, "op kind %u", k); err = b; return {}; }
+        }
+    }
+    if (maxdep > (u32)FMAXS) { err = "condition depth above " + std::to_string(FMAXS); return {}; }
+    return f;
 }
 
 // ─── slot program: the op stream on K cached rows per lane ──────────────────────────────────────────────────────
@@ -936,10 +1168,13 @@ struct Runner {
     std::vector<void*> dptrs;
     Timing tm;
     const SlotProg* sp;
+    const std::vector<FOp>* fast;  // fast filter simulator entries (j must then be the filter job)
+    int fvar;
 
-    Runner(const Job& job, bool use_gpu, u32 lanes, u32 blk, const SlotProg* slots = nullptr)
-        : j(job), gpu(use_gpu), L(lanes), block(blk), sp(slots) {
-        size_t rows = ((size_t)j.nq + j.nb) * L;
+    Runner(const Job& job, bool use_gpu, u32 lanes, u32 blk, const SlotProg* slots = nullptr, const std::vector<FOp>* fops = nullptr,
+           int fv = 0)
+        : j(job), gpu(use_gpu), L(lanes), block(blk), sp(slots), fast(fops), fvar(fv) {
+        size_t rows = ((size_t)j.nq + j.nb + 1) * L;
         if (rows >= (1ULL << 32)) { fprintf(stderr, "too many lanes for 32-bit row offsets\n"); exit(1); }
         d.L = L; d.nq = j.nq; d.nb = j.nb; d.ncops = j.ncops; d.ntests = j.ntests; d.ppos = j.ppos; d.outcap = L;
         d.ops = (const COp*)put(j.ops.data(), j.ops.size() * sizeof(COp));
@@ -949,8 +1184,16 @@ struct Runner {
         d.pst = (const u64*)put(j.pst, sizeof j.pst);
         d.pbuf = (const u8*)put(j.pbuf, sizeof j.pbuf);
         d.tail = (const u8*)put(j.tail.data(), j.tail.size());
-        d.Q = (u64*)zeros(((size_t)j.nq + j.nb) * L * 8);  // qubit rows, then bit rows (the slot program's row ids)
+        d.Q = (u64*)zeros(((size_t)j.nq + j.nb + 1) * L * 8);  // qubit rows, bit rows (the slot program's row ids), ONES
         d.B = d.Q + (size_t)j.nq * L;
+        fill_ones(d.Q + ((size_t)j.nq + j.nb) * L, L);
+        if (fast) {
+            if (gpu && L % FVARS[fvar].lpt) { fprintf(stderr, "lanes must be a multiple of %d\n", FVARS[fvar].lpt); exit(1); }
+            std::vector<FOp> fl(*fast);  // row ids -> word offsets row * L
+            for (FOp& o : fl) if (o.k != F_RUN) { o.t *= L; o.a *= L; o.b *= L; }
+            d.fops = (const FOp*)put(fl.data(), fl.size() * sizeof(FOp));
+            d.nfops = (u32)fl.size();
+        }
         if (sp) {
             d.prog = (const COp*)put(sp->prog.data(), sp->prog.size() * sizeof(COp));
             d.nprog = (u32)sp->prog.size();
@@ -980,7 +1223,13 @@ struct Runner {
         for (void* p : dptrs) cudaFree(p);
 #endif
     }
-    static size_t bytes_per_lane(const Job& j) { return ((size_t)j.nq + j.nb + 512 + KW + 50 + 3 + RECW) * 8 + (4 + NACC) * 4; }
+    static size_t bytes_per_lane(const Job& j) { return ((size_t)j.nq + j.nb + 1 + 512 + KW + 50 + 3 + RECW) * 8 + (4 + NACC) * 4; }
+    void fill_ones(u64* p, size_t n) {
+#ifdef __CUDACC__
+        if (gpu) { CK(cudaMemset(p, 0xFF, n * 8)); return; }
+#endif
+        memset(p, 0xFF, n * 8);
+    }
 
     void* put(const void* src, size_t n) {
 #ifdef __CUDACC__
@@ -1030,7 +1279,8 @@ struct Runner {
             double t2 = now(); tm.kw += t2 - t1;
             k_points<<<L, 64>>>(d); CK(cudaGetLastError()); CK(cudaDeviceSynchronize());
             double t3 = now(); tm.pts += t3 - t2;
-            if (sp) k_slots<<<(L + block - 1) / block, block, slots_smem(sp->K, block)>>>(d);
+            if (fast) { u32 per = FBS * FVARS[fvar].lpt; fast_kernel(fvar)<<<(L + per - 1) / per, FBS>>>(d); }
+            else if (sp) k_slots<<<(L + block - 1) / block, block, slots_smem(sp->K, block)>>>(d);
             else k_sim<<<(L + block - 1) / block, block>>>(d);
             CK(cudaGetLastError()); CK(cudaDeviceSynchronize());
             double t4 = now(); tm.sim += t4 - t3;
@@ -1069,6 +1319,14 @@ struct Runner {
 #pragma omp parallel for schedule(dynamic, 1)
         for (u32 l = 0; l < L; l++) {
             if (dd.state[l] != 1) continue;
+            if (fast) {
+                FCtx<1> fc;
+                const bool act[1] = {true};
+                fctx_init<1>(fc, act);
+                sim_fast<1>(dd.Q + l, dd.fops, dd.nfops, fc);
+                finish_checks(dd, l, 0, 0, fc.over || fc.sp != 0);
+                continue;
+            }
             Ctx c;
             ctx_load(dd, l, c);
             if (sp) {
@@ -1235,9 +1493,9 @@ static void print_search(const SearchStats& s, double secs, const char* where) {
     fflush(stdout);
 }
 
-static bool same_rec(const Rec& a, const Rec& b, bool early) {
+static bool same_rec(const Rec& a, const Rec& b, bool early, bool notof = false) {
     if (early) return a.v[0] == b.v[0] && a.v[1] == b.v[1] && (a.v[9] & 1) == (b.v[9] & 1);
-    for (int i = 0; i < RECW; i++) if (a.v[i] != b.v[i]) return false;
+    for (int i = 0; i < RECW; i++) if (a.v[i] != b.v[i] && !(notof && i == 5)) return false;
     return true;
 }
 
@@ -1248,9 +1506,11 @@ int main(int argc, char** argv) {
     }
     std::vector<std::string> pos;
     u32 lanes = 0, block = 128;
-    bool lanes_given = false, kernel_given = false, specs_given = false;
+    bool lanes_given = false, kernel_given = false;
     double seconds = 0;
-    bool force_cpu = false, stop_on_clean = true;
+    bool force_cpu = false, stop_on_clean = true, filter = false;
+    std::vector<int> fvars;      // --fast: fast simulator variants (FVARS indices)
+    bool fvars_given = false;
     double proj_lambda = 22.04;  // our base and the public head measure ~22.0 on the audit CRN draws
     int device = 0;
     std::string kernel;          // "slots" (default on GPUs with cp.async, sm_80+) or "plain"
@@ -1262,13 +1522,24 @@ int main(int argc, char** argv) {
         else if (a == "--block" && i + 1 < argc) block = (u32)atol(argv[++i]);
         else if (a == "--seconds" && i + 1 < argc) seconds = atof(argv[++i]);
         else if (a == "--cpu") force_cpu = true;
+        else if (a == "--filter") filter = true;
+        else if (a == "--fast" && i + 1 < argc) {
+            std::string v = argv[++i];
+            fvars.clear(); fvars_given = true;
+            if (v == "all") for (int k = 0; k < NFVARS; k++) fvars.push_back(k);
+            else for (size_t p0 = 0; p0 < v.size();) {
+                size_t p1 = v.find(',', p0); if (p1 == std::string::npos) p1 = v.size();
+                int k = atoi(v.substr(p0, p1 - p0).c_str());
+                if (k < 0 || k >= NFVARS) { fprintf(stderr, "--fast: variants are 0..%d\n", NFVARS - 1); return 1; }
+                fvars.push_back(k); p0 = p1 + 1;
+            }
+        }
         else if (a == "--no-stop") stop_on_clean = false;
         else if (a == "--lambda" && i + 1 < argc) proj_lambda = atof(argv[++i]);
         else if (a == "--device" && i + 1 < argc) device = atoi(argv[++i]);
         else if (a == "--kernel" && i + 1 < argc) { kernel = argv[++i]; kernel_given = true; }
         else if (a == "--slots" && i + 1 < argc) {
             std::string v = argv[++i];
-            specs_given = true;
             for (size_t p0 = 0; p0 < v.size();) {
                 size_t p1 = v.find(',', p0); if (p1 == std::string::npos) p1 = v.size();
                 std::string e = v.substr(p0, p1 - p0);
@@ -1310,6 +1581,7 @@ int main(int argc, char** argv) {
         size_t fr = 0, tot = 0;
         CK(cudaMemGetInfo(&fr, &tot));
         maxl = (u32)std::min<size_t>(fr * 0.8 / Runner::bytes_per_lane(job), 1u << 20);
+        maxl = std::min<u32>(maxl, (u32)(0xFFFFFFFFull / ((u64)job.nq + job.nb + 1)) / 256 * 256);  // 32-bit row offsets
         if (!lanes) lanes = std::min<u32>(maxl, (u32)prop.multiProcessorCount * 512);
         if (lanes > maxl) lanes = maxl;
         lanes = std::max<u32>(block, lanes / block * block);
@@ -1327,8 +1599,46 @@ int main(int argc, char** argv) {
     }
     fprintf(stderr, "job: %u ops (%u compiled, %u rng reads per batch), %u qubits, %u bits, tail nonce %llu\n", job.nops, job.ncops,
             job.nrng, job.nq, job.nb, (unsigned long long)job.tail_nonce);
-    if (kernel.empty()) kernel = (gpu && cc_major >= 8) ? "slots" : "plain";
-    if (kernel != "slots" && kernel != "plain") { fprintf(stderr, "--kernel is slots or plain\n"); return 1; }
+    Job fjob;                    // the classical filter stream (filter_ops), built when needed
+    std::vector<FOp> fops;       // and its fast-simulator entries (empty: the fast simulator cannot run this circuit)
+    bool fbuilt = false;
+    auto build_filter = [&]() {
+        if (fbuilt) return;
+        fbuilt = true;
+        FilterStats fs;
+        fjob = job;
+        fjob.ops = filter_ops(job, fs);
+        fjob.ncops = (u32)fjob.ops.size();
+        fprintf(stderr, "classical filter: %llu of %llu ops kept (%llu phase ops and %llu ops conditioned on a 0 outcome dropped; "
+                "%llu resets, %llu bit ops, %llu conditions folded)\n", (unsigned long long)fs.out, (unsigned long long)fs.in,
+                (unsigned long long)fs.phase, (unsigned long long)fs.dead, (unsigned long long)fs.rst, (unsigned long long)fs.bitops,
+                (unsigned long long)fs.folded);
+        std::string err;
+        fops = compile_fast(fjob, err);
+        if (fops.empty()) fprintf(stderr, "the fast simulator cannot run this circuit (%s): using the plain simulator\n", err.c_str());
+    };
+    if (kernel.empty()) kernel = (mode == "search" || mode == "bench") ? "fast" : "plain";
+    if (kernel != "slots" && kernel != "plain" && kernel != "fast") { fprintf(stderr, "--kernel is fast, plain or slots\n"); return 1; }
+    if (kernel == "fast") { build_filter(); if (fops.empty()) kernel = "plain"; }
+    if (filter || kernel == "fast") build_filter();
+    if (fvars.empty()) fvars.push_back(0);
+    const Job* J = (filter || kernel == "fast") ? &fjob : &job;   // the stream the runs simulate
+    const std::vector<FOp>* F = kernel == "fast" ? &fops : nullptr;
+    int fvar = fvars[0];
+    if (F) block = FBS;
+    if (mode == "compile" && fbuilt) {
+        static const char* KN[] = {"CCX", "CX", "SWAP", "X", "CCZ", "CZ", "Z", "NEG", "HMR", "R", "BINV", "B0", "B1", "PUSH", "POP",
+                                   "?", "?", "?", "RST"};
+        u64 cnt[19] = {0}, flg = 0; u32 dep = 0, maxdep = 0;
+        for (const COp& o : fjob.ops) {
+            u32 k = o.w0 & 0xFF; cnt[k < 19 ? k : 15]++;
+            if (k == K_PUSH) maxdep = std::max(maxdep, ++dep); else if (k == K_POP) dep--; else if (o.w0 & 0xFF00) flg++;
+        }
+        fprintf(stderr, "filter ops:");
+        for (int k = 0; k < 19; k++) if (cnt[k]) fprintf(stderr, " %s %.2f%%", KN[k], 100.0 * cnt[k] / fjob.ncops);
+        fprintf(stderr, "; flagged (not PUSH) %llu; condition depth %u; fast entries %zu\n", (unsigned long long)flg, maxdep, fops.size());
+        return 0;
+    }
     std::vector<SlotProg> progs;  // compiled once per slot count
     auto prog_for = [&](Spec sc) -> const SlotProg* {
         for (auto& p : progs) if (p.K == sc.K && p.alpha == sc.alpha) return &p;
@@ -1352,36 +1662,48 @@ int main(int argc, char** argv) {
     }
     const SlotProg* SP = kernel == "slots" ? prog_for(specs[0]) : nullptr;
     if (SP && specs[0].block) block = specs[0].block;
-    // lanes that fit on the GPU at once with this kernel (slots: shared memory decides)
-    auto resident = [&](const SlotProg* p, u32 block) -> u32 {
+    // a simulator choice: the slot program p, the fast filter simulator variant fv (-1: none), threads per block
+    struct KSel { const SlotProg* p; int fv; u32 block; };
+    auto lpt = [](const KSel& k) -> u32 { return k.fv >= 0 ? (u32)FVARS[k.fv].lpt : 1u; };
+    // lanes that fit on the GPU at once with this kernel (slots: shared memory decides; fast: registers)
+    auto resident = [&](const KSel& k) -> u32 {
 #ifdef __CUDACC__
         if (gpu) {
             int nb = 0;
-            if (p) {
-                CK(cudaFuncSetAttribute(k_slots, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)slots_smem(p->K, block)));
-                CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb, k_slots, block, slots_smem(p->K, block)));
-            } else CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb, k_sim, block, 0));
-            return (u32)std::max(nb, 1) * nsm * block;
+            if (k.fv >= 0) CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb, fast_kernel(k.fv), FBS, 0));
+            else if (k.p) {
+                CK(cudaFuncSetAttribute(k_slots, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)slots_smem(k.p->K, k.block)));
+                CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb, k_slots, k.block, slots_smem(k.p->K, k.block)));
+            } else CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb, k_sim, k.block, 0));
+            return (u32)std::max(nb, 1) * nsm * k.block * lpt(k);
         }
 #endif
-        (void)p; (void)block;
+        (void)k;
         return lanes;
     };
-    auto default_lanes = [&](const SlotProg* p, u32 b) { return std::max<u32>(b, std::min<u32>(maxl, 2 * resident(p, b)) / b * b); };
-    if (gpu && !lanes_given) lanes = default_lanes(SP, block);
-    auto kname = [&](const SlotProg* p, u32 blk) {
-        char b[96];
-        if (!p) snprintf(b, sizeof b, "plain, block %u", blk);
-        else snprintf(b, sizeof b, "slots K=%u alpha=%g, block %u", p->K, p->alpha, blk);
+    auto default_lanes = [&](const KSel& k) {
+        u32 g = k.block * lpt(k);
+        return std::max<u32>(g, std::min<u32>(maxl, 2 * resident(k)) / g * g);
+    };
+    auto kname = [&](const KSel& k) {
+        char b[128];
+        if (k.fv >= 0) snprintf(b, sizeof b, "fast filter v%d (%d lanes/thread, >= %d blocks/SM), block %u", k.fv, FVARS[k.fv].lpt,
+                                FVARS[k.fv].minb, FBS);
+        else if (!k.p) snprintf(b, sizeof b, "plain, block %u", k.block);
+        else snprintf(b, sizeof b, "slots K=%u alpha=%g, block %u", k.p->K, k.p->alpha, k.block);
         return std::string(b);
     };
-    if (gpu) fprintf(stderr, "kernel %s: %u lanes resident on the GPU at once; running %u lanes\n", kname(SP, block).c_str(),
-                     resident(SP, block), lanes);
+    const KSel cur{SP, F ? fvar : -1, block};
+    // lane counts must be a multiple of the lanes per thread on the GPU (the CPU path runs one lane at a time)
+    auto fitL = [&](u64 want, const KSel& k) -> u32 { u32 g = gpu ? lpt(k) : 1; return (u32)((std::max<u64>(want, 1) + g - 1) / g * g); };
+    if (gpu && !lanes_given) lanes = default_lanes(cur);
+    if (gpu) lanes = fitL(lanes, cur);
+    if (gpu) fprintf(stderr, "kernel %s: %u lanes resident on the GPU at once; running %u lanes\n", kname(cur).c_str(), resident(cur), lanes);
     auto quiet = [](const std::vector<Rec>&, double) { return true; };
 
     if (mode == "crn") {
         u64 start = strtoull(pos.at(2).c_str(), 0, 10), count = strtoull(pos.at(3).c_str(), 0, 10);
-        Runner R(job, gpu, std::min<u64>(lanes, std::max<u64>(count, 1)) , block, SP);
+        Runner R(*J, gpu, fitL(std::min<u64>(lanes, std::max<u64>(count, 1)), cur), block, SP, F, fvar);
         double t0 = Runner::now();
         auto r = R.run(false, false, start, count, quiet);
         print_crn(job, r, Runner::now() - t0, where.c_str());
@@ -1389,7 +1711,7 @@ int main(int argc, char** argv) {
     }
     if (mode == "check") {
         u64 nonce = strtoull(pos.at(2).c_str(), 0, 10);
-        Runner R(job, gpu, 1, block, SP);  // one lane
+        Runner R(*J, gpu, fitL(1, cur), block, SP, F, fvar);  // one lane
         double t0 = Runner::now();
         auto r = R.run(true, false, nonce, 1, quiet);
         const u64* v = r.at(0).v;
@@ -1400,49 +1722,63 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (mode == "search" || mode == "bench") {
-        struct Cfg { u32 L; const SlotProg* p; u32 block; };
+        struct Cfg { u32 L; KSel k; };
         std::vector<Cfg> cfgs;
         u64 start, count;
         if (mode == "search") {
             start = strtoull(pos.at(2).c_str(), 0, 10); count = strtoull(pos.at(3).c_str(), 0, 10);
-            cfgs.push_back({lanes, SP, block});
+            cfgs.push_back({lanes, cur});
         } else {
             if (seconds <= 0) seconds = pos.size() > 2 ? atof(pos[2].c_str()) : 90;
             start = 1000000000000ULL; count = 1ULL << 40;
-            if (gpu && !kernel_given) {  // the plain simulator, then the slot program at several slot counts
-                cfgs.push_back({default_lanes(nullptr, 128), nullptr, 128});
-                if (cc_major >= 8) {
-                    std::vector<Spec> bs = specs_given ? specs
-                        : std::vector<Spec>{{32, 2, 128}, {64, 0, 128}, {64, 2, 128}, {64, 2, 64}, {128, 2, 64}};
-                    for (const Spec& sc : bs) {
-                        const SlotProg* p = prog_for(sc);
-                        u32 b = sc.block ? sc.block : 128;
-                        cfgs.push_back({default_lanes(p, b), p, b});
-                    }
-                }
+            if (gpu && !kernel_given) {  // the exact plain simulator (the old search), then the fast filter variants
+                KSel pk{nullptr, -1, 128};
+                cfgs.push_back({default_lanes(pk), pk});
+                std::vector<int> vs = fvars;
+                if (!fvars_given) { vs.clear(); for (int v = 0; v < NFVARS; v++) vs.push_back(v); }
+                if (!fops.empty()) for (int v : vs) { KSel k{nullptr, v, FBS}; cfgs.push_back({lanes_given ? fitL(lanes, k) : default_lanes(k), k}); }
             } else if (gpu && SP && specs.size() > 1) {
                 for (const Spec& sc : specs) {
                     const SlotProg* p = prog_for(sc);
-                    u32 b = sc.block ? sc.block : 128;
-                    cfgs.push_back({lanes_given ? lanes : default_lanes(p, b), p, b});
+                    KSel k{p, -1, sc.block ? sc.block : 128};
+                    cfgs.push_back({lanes_given ? lanes : default_lanes(k), k});
                 }
-            } else cfgs.push_back({lanes, SP, block});
+            } else if (gpu && F && fvars.size() > 1) {
+                for (int v : fvars) { KSel k{nullptr, v, FBS}; cfgs.push_back({lanes_given ? fitL(lanes, k) : default_lanes(k), k}); }
+            } else cfgs.push_back({lanes, cur});
         }
         double best_rate = 0; std::string best_name;
         for (const Cfg& cf : cfgs) {
             const u32 L = cf.L;
             std::vector<std::pair<double, u64>> trace;  // (elapsed, finished) after every round
-            Runner R(job, gpu, L, cf.block, cf.p);
+            const bool fastc = cf.k.fv >= 0;
+            const Job& JJ = fastc ? fjob : (filter ? fjob : job);
+            const std::vector<FOp>* FF = fastc ? &fops : nullptr;
+            const bool filtered = fastc || filter;  // a clean record only passed the classical filter: check it in full
+            Runner R(JJ, gpu, L, cf.k.block, cf.k.p, FF, fastc ? cf.k.fv : 0);
             SearchStats st;
             size_t seen = 0;
             double last = 0;
             bool found = false;
-            char w[200]; snprintf(w, sizeof w, "%s, %s, %u lanes", where.c_str(), kname(cf.p, cf.block).c_str(), L);
+            char w[240]; snprintf(w, sizeof w, "%s, %s, %u lanes", where.c_str(), kname(cf.k).c_str(), L);
             auto on = [&](const std::vector<Rec>& r, double el) {
                 st.lane_batches += L;  // every lane holds a nonce and runs one batch per round
                 for (; seen < r.size(); seen++) {
                     add_search(st, r[seen]);
-                    if (r[seen].v[9] & 1) { printf("CLEAN nonce %llu\n", (unsigned long long)r[seen].v[0]); fflush(stdout); found = true; }
+                    if (!(r[seen].v[9] & 1)) continue;
+                    const unsigned long long nonce = (unsigned long long)r[seen].v[0];
+                    if (!filtered) { printf("CLEAN nonce %llu\n", nonce); fflush(stdout); found = true; continue; }
+                    printf("CANDIDATE nonce %llu passed the classical filter\n", nonce); fflush(stdout);
+                    if (mode != "search") continue;
+                    // the full official test (outcomes, phase, Toffoli count) on the CPU, while nothing else runs
+                    Runner V(job, false, 1, 128);
+                    auto vr = V.run(true, false, r[seen].v[0], 1, quiet);
+                    const u64* v = vr.at(0).v;
+                    printf("full check of nonce %llu: clean=%s classical_failures=%llu phase_garbage_batches=%llu ancilla_garbage_batches=%llu "
+                           "failing_batches=%llu avg_tof=%.3f\n", nonce, (v[9] & 1) ? "true" : "false", (unsigned long long)v[2],
+                           (unsigned long long)v[3], (unsigned long long)v[4], (unsigned long long)v[1], (double)v[5] / std::max<u64>(v[6], 1));
+                    if (v[9] & 1) { printf("CLEAN nonce %llu\n", nonce); found = true; }
+                    fflush(stdout);
                 }
                 trace.push_back({el, st.finished});
                 if (el - last > 60) { last = el; print_search(st, el, w); }
@@ -1471,7 +1807,8 @@ int main(int argc, char** argv) {
             double tt = R.tm.seed + R.tm.kw + R.tm.pts + R.tm.sim + R.tm.io;
             printf("time split: seed %.0f%%, k words %.0f%%, points %.0f%%, simulator+checks %.0f%%, copies %.0f%%; %.0f lane-batches/s, "
                    "%.2e gate-lanes/s in the simulator\n", 100 * R.tm.seed / tt, 100 * R.tm.kw / tt, 100 * R.tm.pts / tt, 100 * R.tm.sim / tt,
-                   100 * R.tm.io / tt, st.lane_batches / std::max(secs, 1e-9), (double)st.lane_batches * job.ncops / std::max(R.tm.sim, 1e-9));
+                   100 * R.tm.io / tt, st.lane_batches / std::max(secs, 1e-9),
+                   (double)st.lane_batches * (FF ? FF->size() : JJ.ncops) / std::max(R.tm.sim, 1e-9));
             fflush(stdout);
             start += st.finished + L;
         }
@@ -1521,10 +1858,10 @@ int main(int argc, char** argv) {
     if (mode == "faildump") {  // CPU, plain simulator: every failing shot of CRN draws start..start+count
         if (gpu) { fprintf(stderr, "faildump runs on the CPU (--cpu)\n"); return 1; }
         u64 start = strtoull(pos.at(2).c_str(), 0, 10), count = strtoull(pos.at(3).c_str(), 0, 10);
-        Runner R(job, false, std::min<u64>(lanes, count), block);
+        Runner R(*J, false, std::min<u64>(lanes, count), block, nullptr, F, fvar);
         R.d.dump = 1;
         auto r = R.run(false, false, start, count, quiet);
-        print_crn(job, r, 0, where.c_str());
+        print_crn(*J, r, 0, where.c_str());
         return 0;
     }
     if (mode == "selftest") {
@@ -1536,7 +1873,7 @@ int main(int argc, char** argv) {
             std::sort(a.begin(), a.end(), by); std::sort(b.begin(), b.end(), by);
             int mism = 0;
             if (a.size() != b.size()) { printf("%s: %zu vs %zu records\n", what, a.size(), b.size()); bad++; return; }
-            for (size_t i = 0; i < a.size(); i++) if (!same_rec(a[i], b[i], early)) {
+            for (size_t i = 0; i < a.size(); i++) if (!same_rec(a[i], b[i], early, F != nullptr)) {
                 mism++;
                 if (mism <= 5) printf("%s MISMATCH id %llu: device %llu/%llu/%llu tof %llu, cpu %llu/%llu/%llu tof %llu\n", what,
                     (unsigned long long)a[i].v[0], (unsigned long long)a[i].v[1], (unsigned long long)a[i].v[2], (unsigned long long)a[i].v[3],
@@ -1549,21 +1886,21 @@ int main(int argc, char** argv) {
         u32 cl = std::max(8, threads);
         double t0 = Runner::now();
         std::vector<Rec> dc, cc, ds, cs;
-        { Runner R(job, gpu, gpu ? lanes : cl, block, SP); dc = R.run(false, false, 0, ncrn, quiet); }
+        { Runner R(*J, gpu, gpu ? lanes : cl, block, SP, F, fvar); dc = R.run(false, false, 0, ncrn, quiet); }
         printf("device CRN draws 0..%llu: %.1f s\n", (unsigned long long)ncrn - 1, Runner::now() - t0);
         t0 = Runner::now();
-        { Runner R(job, gpu, gpu ? lanes : cl, block, SP); ds = R.run(true, true, 1000, nsearch, quiet); }
+        { Runner R(*J, gpu, gpu ? lanes : cl, block, SP, F, fvar); ds = R.run(true, true, 1000, nsearch, quiet); }
         printf("device search nonces 1000..%llu: %.1f s\n", (unsigned long long)(1000 + nsearch - 1), Runner::now() - t0);
-        print_crn(job, dc, 0, where.c_str());
-        if (gpu || SP) {  // against the plain simulator on the CPU
+        print_crn(*J, dc, 0, where.c_str());
+        if (gpu || SP || F) {  // against the plain simulator on the CPU (on the same stream)
             t0 = Runner::now();
-            { Runner R(job, false, cl, block); cc = R.run(false, false, 0, ncrn, quiet); }
-            { Runner R(job, false, cl, block); cs = R.run(true, true, 1000, nsearch, quiet); }
+            { Runner R(*J, false, cl, 128); cc = R.run(false, false, 0, ncrn, quiet); }
+            { Runner R(*J, false, cl, 128); cs = R.run(true, true, 1000, nsearch, quiet); }
             printf("CPU reference: %.1f s\n", Runner::now() - t0);
             cmp("CRN draws", dc, cc, false);
             cmp("search nonces", ds, cs, true);
             printf(bad ? "SELFTEST FAILED\n" : "SELFTEST OK: %s (%s) matches the plain CPU simulator record for record\n",
-                   gpu ? "the GPU" : "the CPU", kname(SP, block).c_str());
+                   gpu ? "the GPU" : "the CPU", kname(cur).c_str());
         }
         for (auto& r : ds) printf("nonce %llu passed_batches %llu clean %s\n", (unsigned long long)r.v[0], (unsigned long long)r.v[1], (r.v[9] & 1) ? "true" : "false");
         return bad ? 1 : 0;

@@ -16,7 +16,7 @@ docker build -t agentlab -f "$here/docker/Dockerfile" "$here"
 tty_flags=(-i)
 [[ -t 0 ]] && tty_flags=(-it)
 env_args=(); [[ -n "${AGENTLAB_CONFIG:-}" ]] && env_args=(-e "AGENTLAB_CONFIG=$AGENTLAB_CONFIG")
-exec docker run --rm "${tty_flags[@]}" "${env_args[@]}" --name "agentlab-$$" \
+exec docker run --rm "${tty_flags[@]}" ${env_args[@]+"${env_args[@]}"} --name "agentlab-$$" \
   --memory 6g --cpus "$(( $(getconf _NPROCESSORS_ONLN) > 1 ? $(getconf _NPROCESSORS_ONLN) - 1 : 1 ))" \
   -v "$here":/work/ecdsafail-agent \
   -v agentlab-challenge:/root/ecdsafail-challenge \

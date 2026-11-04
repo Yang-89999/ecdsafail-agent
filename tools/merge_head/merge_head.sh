@@ -34,7 +34,8 @@ python3 "$here/tools/merge_head/patch.py" "$wt"
 new="$(git rev-parse HEAD)"
 out="$here/work/win/crn_ops/merge-${new:0:8}"
 mkdir -p "$out"
-echo "== building ${new:0:8} (a few minutes)"
+echo "== fetching crates (a fresh container has none) and building ${new:0:8} (a few minutes)"
+(cd "$wt" && RUSTUP_TOOLCHAIN="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain)" cargo fetch --locked -q)
 set +e
 bash "$here/scripts/build_ops.sh" "$wt" "$out" > "$out.log" 2>&1
 rc=$?

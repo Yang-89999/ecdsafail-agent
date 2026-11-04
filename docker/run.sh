@@ -11,8 +11,11 @@
 #   agentlab-codex     -> Codex login
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd -P)"
-echo "== building the agentlab image (first time ~5-10 min; cached afterwards) =="
-docker build -t agentlab -f "$here/docker/Dockerfile" "$here"
+# start.sh rebuilds the image on every start; here only when it is missing (the build checks Docker Hub online)
+if ! docker image inspect agentlab >/dev/null 2>&1; then
+  echo "== building the agentlab image (first time ~5-10 min; cached afterwards) =="
+  docker build -t agentlab -f "$here/docker/Dockerfile" "$here"
+fi
 tty_flags=(-i)
 [[ -t 0 ]] && tty_flags=(-it)
 env_args=(); [[ -n "${AGENTLAB_CONFIG:-}" ]] && env_args=(-e "AGENTLAB_CONFIG=$AGENTLAB_CONFIG")

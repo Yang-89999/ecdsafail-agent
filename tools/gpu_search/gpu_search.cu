@@ -457,6 +457,24 @@ HD void sim_ops(u64* __restrict__ Ql, u64* __restrict__ Bl, const u32 L, const C
     }
 }
 
+// CPU research (census mode): sim_ops, also counting per CCX/CCZ op the shots on which it fires (both controls 1
+// under the condition), i.e. the shots whose result depends on that Toffoli at all
+static void sim_census(u64* __restrict__ Ql, u64* __restrict__ Bl, const u32 L, const COp* ops, u32 n, Ctx& c, u32* fires) {
+    for (u32 i = 0; i < n; i++) {
+        const u32 w0 = ops[i].w0, w1 = ops[i].w1;
+        const u32 k = w0 & 0xFF, qt = w0 >> 16, q1 = w1 & 0xFFFF, q2 = w1 >> 16;
+        if (k == K_CCX || k == K_CCZ) {
+            u64 cond = c.base;
+            if (w0 & 0xFF00) cond &= Bl[(ops[i].w2 >> 16) * L];
+            u64 f = cond & Ql[q1 * L] & Ql[q2 * L];
+            if (k == K_CCZ) f &= Ql[qt * L];
+            fires[2 * i] += popc64(f);
+            fires[2 * i + 1] += popc64(cond);
+        }
+        sim_ops(Ql, Bl, L, ops + i, 1, c);
+    }
+}
+
 // cp.async (sm_80 and newer): a LOAD copies a row word into its shared-memory slot without stalling the thread; the
 // host compiler puts a WAIT before the slot's first use, allowing the loads issued after it to stay in flight
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
@@ -1424,6 +1442,50 @@ struct Runner {
         *d.outn = 0;
     }
 
+    // census: one round of 64-shot batches, every lane simulated with sim_census; fires summed into tot
+    void round_census(std::vector<u64>& tot, u64& shots) {
+        const Dev dd = d;
+        for (u32 l = 0; l < L; l++) seed_lane(dd, l);
+#pragma omp parallel for schedule(dynamic, 1)
+        for (u32 l = 0; l < L; l++) kwords_lane(dd, l);
+#pragma omp parallel for schedule(dynamic, 1)
+        for (u32 l = 0; l < L; l++) {
+            if (dd.state[l] != 1) continue;
+            Fe v[6][64];
+            for (u32 s = 0; s < 64; s++) {
+                Fe t[6];
+                if (points_shot(dd, l, s, t)) dd.acc[(size_t)l * NACC + A_FLAGS] |= 2;
+                for (int w = 0; w < 6; w++) v[w][s] = t[w];
+            }
+            for (int w = 0; w < 6; w++)
+                for (u32 i = 0; i < 256; i++) {
+                    u64 mm = 0;
+                    for (u32 s = 0; s < 64; s++) mm |= ((v[w][s].v[i >> 6] >> (i & 63)) & 1) << s;
+                    *plane(dd, l, w, i) = mm;
+                }
+        }
+#pragma omp parallel
+        {
+            std::vector<u32> f(2 * (size_t)dd.ncops, 0);
+            u64 sh = 0;
+#pragma omp for schedule(dynamic, 1)
+            for (u32 l = 0; l < L; l++) {
+                if (dd.state[l] != 1) continue;
+                Ctx c;
+                ctx_load(dd, l, c);
+                sh += popc64(c.base);
+                sim_census(dd.Q + l, dd.B + l, L, dd.ops, dd.ncops, c, f.data());
+                finish_lane(dd, l, c);
+            }
+#pragma omp critical
+            {
+                for (size_t i = 0; i < 2 * (size_t)dd.ncops; i++) tot[i] += f[i];
+                shots += sh;
+            }
+        }
+        *d.outn = 0;
+    }
+
     // runs draws start..start+count; on_round(records so far, elapsed) after every round; stops early when it returns false
     std::vector<Rec> run(bool seed_nonce, bool early, u64 start, u64 count,
                          const std::function<bool(const std::vector<Rec>&, double)>& on_round) {
@@ -1853,6 +1915,45 @@ int main(int argc, char** argv) {
                 printf("checkpoint %3u (op %8u, %5.1f%%): failing shots caught so far %5.1f%%, passing shots flagged %.5f%%\n", k, m.cps[k],
                        100.0 * m.cps[k] / job.ncops, 100.0 * cf / std::max<u64>(F, 1), 100.0 * cp / std::max<u64>(Pn, 1));
         }
+        return 0;
+    }
+    if (mode == "census") {  // CPU research: per Toffoli (k-th CCX/CCZ of the stream), on how many shots of CRN draws it fires
+        if (gpu) { fprintf(stderr, "census runs on the CPU (--cpu)\n"); return 1; }
+        u64 start = strtoull(pos.at(2).c_str(), 0, 10), count = strtoull(pos.at(3).c_str(), 0, 10);
+        const char* outp = pos.size() > 4 ? pos[4].c_str() : "census.txt";
+        Runner R(job, false, (u32)std::min<u64>(lanes, count), block);
+        R.d.seed_nonce = 0; R.d.early = 0;
+        R.reset_lanes();
+        R.set64(R.d.next, start); R.set64(R.d.end, start + count);
+        std::vector<u64> tot(2 * (size_t)job.ncops, 0);
+        u64 shots = 0;
+        double t0 = Runner::now();
+        for (u32 rr = 0; rr < 141 * ((count + R.L - 1) / R.L); rr++) R.round_census(tot, shots);
+        FILE* o = fopen(outp, "w");
+        if (!o) { fprintf(stderr, "cannot write %s\n", outp); return 1; }
+        fprintf(o, "# census of %llu shots (CRN draws %llu..%llu); columns: toffoli ordinal, compiled op, kind, q1 q2 qt, flagged, shots fired, shots charged (condition true)\n",
+                (unsigned long long)shots, (unsigned long long)start, (unsigned long long)(start + count - 1));
+        u64 ord = 0, h[8] = {0}, charged = 0, never_charged = 0, le1_charged = 0;
+        for (u32 i = 0; i < job.ncops; i++) {
+            const u32 w0 = job.ops[i].w0, w1 = job.ops[i].w1, k = w0 & 0xFF;
+            if (k != K_CCX && k != K_CCZ) continue;
+            u64 f = tot[2 * (size_t)i], ex = tot[2 * (size_t)i + 1];
+            charged += ex;
+            if (f == 0) never_charged += ex;
+            if (f <= 1) le1_charged += ex;
+            int b = f == 0 ? 0 : f <= 1 ? 1 : f <= 10 ? 2 : f <= 100 ? 3 : f <= 1000 ? 4 : f * 100 <= shots ? 5 : f * 2 <= shots ? 6 : 7;
+            h[b]++;
+            fprintf(o, "%llu %u %s %u %u %u %d %llu %llu\n", (unsigned long long)ord, i, k == K_CCX ? "CCX" : "CCZ", w1 & 0xFFFF, w1 >> 16, w0 >> 16,
+                    (w0 & 0xFF00) ? 1 : 0, (unsigned long long)f, (unsigned long long)ex);
+            ord++;
+        }
+        fclose(o);
+        const char* nm[8] = {"never", "1 shot", "2-10", "11-100", "101-1000", "<=1%", "<=50%", ">50%"};
+        printf("census: %llu shots in %.0f s, %llu Toffoli ops; fired on:\n", (unsigned long long)shots, Runner::now() - t0, (unsigned long long)ord);
+        for (int b = 0; b < 8; b++) printf("  %-9s %10llu ops\n", nm[b], (unsigned long long)h[b]);
+        printf("Toffoli charged per shot: %.3f; of it on ops that never fired %.3f, fired on <= 1 shot %.3f\n", (double)charged / shots,
+               (double)never_charged / shots, (double)le1_charged / shots);
+        printf("per-op counts: %s\n", outp);
         return 0;
     }
     if (mode == "faildump") {  // CPU, plain simulator: every failing shot of CRN draws start..start+count
